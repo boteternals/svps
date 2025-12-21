@@ -1,24 +1,28 @@
-# STAGE 1: Kompilasi Engine
+# STAGE 1: Kompilasi Engine menggunakan Golang Alpine
 FROM golang:1.21-alpine AS builder
+
+# Set direktori kerja
 WORKDIR /app
 
-# Copy modul dulu
-COPY go.mod ./
-# Jika ada go.sum, copy juga. Jika tidak, tidak apa-apa.
-COPY go.sum* ./
-
-# Paksa update modul dan buat go.sum yang valid di dalam container
-RUN go mod tidy
-
-# Copy sisanya
+# 1. Salin seluruh file proyek ke dalam container (termasuk folder core)
 COPY . .
 
-# Build dengan flag -installsuffix cgo agar benar-benar statis
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /svps-server core/main.go
+# 2. Jalankan mod tidy untuk mendeteksi import di core/main.go secara otomatis
+# Dan paksa download dependensi utama untuk memastikan keberadaannya
+RUN go mod tidy && \
+    go mod download github.com/creack/pty && \
+    go mod download github.com/gorilla/websocket
 
-# STAGE 2: OS Ubuntu
+# 3. Kompilasi program menjadi file biner statis
+RUN CGO_ENABLED=0 GOOS=linux go build -o /svps-server core/main.go
+
+# STAGE 2: Runtime Environment menggunakan Ubuntu
 FROM ubuntu:22.04
 
+# Hindari interaksi saat instalasi package
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update dan install tool esensial yang membuat SVPS terasa seperti VPS asli
 RUN apt-get update && apt-get install -y \
     bash \
     curl \
@@ -27,16 +31,24 @@ RUN apt-get update && apt-get install -y \
     htop \
     wget \
     sudo \
+    net-tools \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
+# Salin file biner dari builder ke image akhir
 COPY --from=builder /svps-server /usr/local/bin/svps-server
 RUN chmod +x /usr/local/bin/svps-server
 
+# Pengaturan Terminal agar mendukung warna dan shell default
 ENV TERM=xterm-256color
 ENV SHELL=/bin/bash
 
+# Set folder kerja default saat user masuk
 WORKDIR /root
 
+# Zeabur menggunakan port dinamis, kita expose 8080 sebagai standar
 EXPOSE 8080
+
+# Jalankan SVPS Engine
 CMD ["svps-server"]
 
