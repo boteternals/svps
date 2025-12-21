@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 )
 
-// KONSTANTA VERSI (Protocol Lock)
-const SVPS_PROTOCOL_VERSION = "3.0"
+// KITA NAIKKAN VERSI BIAR JELAS
+const SVPS_PROTOCOL_VERSION = "3.1"
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -21,35 +22,42 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
-	// 1. CEK VERSI PROTOKOL (Wajib Update)
+	// 1. SECURITY CHECK LEVEL 1: Cek Versi Client
 	clientVersion := r.Header.Get("X-SVPS-VERSION")
-	if clientVersion != SVPS_PROTOCOL_VERSION {
-		log.Printf("[!] Version Mismatch. Client: %s, Server: %s", clientVersion, SVPS_PROTOCOL_VERSION)
-		http.Error(w, "CLIENT_OUTDATED_PLEASE_UPDATE", http.StatusUpgradeRequired) // Error 426
+	// Kita longgarkan sedikit, v3.0 dan v3.1 boleh masuk (backward compatible dikit)
+	if clientVersion != "3.0" && clientVersion != "3.1" {
+		log.Printf("[!] Tolak Client Versi: %s", clientVersion)
+		http.Error(w, "CLIENT_OUTDATED_UPDATE_NOW", 426)
 		return
 	}
 
-	// 2. Ambil Config dari ENV (Sesuai Request Kamu)
-	serverPass := os.Getenv("PASS")     // Dulu KEYS
-	serverName := os.Getenv("NAMES")    // Username Default
-	serverAlias := os.Getenv("ALIASE")  // Hostname Palsu (Branding)
-
-	// Fallback jika lupa setting ENV
-	if serverName == "" { serverName = "root" }
-	if serverAlias == "" { serverAlias = "svps-box" }
-
-	// 3. Validasi Password
-	clientKey := r.Header.Get("X-SVPS-TOKEN")
-	if serverPass != "" && clientKey != serverPass { // Jika PASS kosong, anggap open (opsional) atau tolak
-		if serverPass != "" {
-			log.Printf("[!] Unauthorized access attempt from: %s", r.RemoteAddr)
-			http.NotFound(w, r) // Kasih 404 biar bingung
-			return
-		}
+	// 2. SECURITY CHECK LEVEL 2: Wajib Ada Password Server
+	serverPass := os.Getenv("PASS")
+	if serverPass == "" {
+		// JIKA PASS KOSONG -> MATIKAN AKSES. JANGAN BIARKAN MASUK.
+		log.Println("[CRITICAL] ENV 'PASS' BELUM DISET DI ZEABUR!")
+		http.Error(w, "SERVER_MISCONFIGURED_NO_PASS_SET", 500)
+		return
 	}
 
-	// 4. Tentukan Username Tampilan
-	// Priority: Request Client > ENV NAMES
+	// 3. SECURITY CHECK LEVEL 3: Validasi Password
+	clientKey := r.Header.Get("X-SVPS-TOKEN")
+	if clientKey != serverPass {
+		log.Printf("[!] Password Salah dari: %s", r.RemoteAddr)
+		// Kasih delay 1 detik biar brute force lambat
+		time.Sleep(1 * time.Second)
+		http.Error(w, "WRONG_PASSWORD_GET_OUT", 403)
+		return
+	}
+
+	// 4. CONFIG NAMA (Branding)
+	serverName := os.Getenv("NAMES")
+	if serverName == "" { serverName = "ROOT" } // Default Uppercase biar beda
+	
+	serverAlias := os.Getenv("ALIASE")
+	if serverAlias == "" { serverAlias = "BOX" }
+
+	// Prioritas Nama: Request Client > ENV Server
 	clientRequestUser := r.Header.Get("X-SVPS-USER")
 	finalUser := serverName
 	if clientRequestUser != "" && clientRequestUser != "root" {
@@ -60,24 +68,32 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	if err != nil { return }
 	defer conn.Close()
 
-	// 5. MANIPULASI TAMPILAN PROMPT (THE MAGIC) 🪄
-	c := exec.Command("bash")
+	// 5. MEMAKSA UBAH TAMPILAN (Force .bashrc overwrite)
+	// Kita tulis langsung config prompt ke file startup bash
+	// Warna: User(Hijau) @ Alias(Merah) : Path(Biru)
+	customPS1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", finalUser, serverAlias)
 	
-	// Kita rakit PS1 secara manual.
-	// Format: [Hijau]User@[Ungu]Alias:[Biru]Path[Reset]$ 
-	// \w = Path (menampilkan ~ jika di home)
-	customPrompt := fmt.Sprintf("PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", finalUser, serverAlias)
+	// Tulis ke /root/.bashrc (Ini cara paling kejam dan pasti berhasil)
+	fBash, _ := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if fBash != nil {
+		fBash.WriteString("\n" + customPS1 + "\n")
+		fBash.Close()
+	}
 
-	// Inject ke Environment
+	// Siapkan Command Bash
+	c := exec.Command("bash")
 	c.Env = append(os.Environ(), 
 		"TERM=xterm-256color",
 		"HOME=/root",
-		customPrompt, // Ini yang bikin hostname panjang hilang!
 	)
 
 	f, err := pty.Start(c)
 	if err != nil { return }
 	defer f.Close()
+
+	// Kirim Banner Selamat Datang (Bukti kode baru jalan)
+	welcomeMsg := fmt.Sprintf("\r\n\033[1;36m=== WELCOME TO SVPS SECURE SHELL v%s ===\033[0m\r\n", SVPS_PROTOCOL_VERSION)
+	conn.WriteMessage(websocket.TextMessage, []byte(welcomeMsg))
 
 	// Bridge WebSocket
 	go func() {
@@ -102,10 +118,10 @@ func main() {
 
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("SVPS Secure Core v3.0"))
+		w.Write([]byte("SVPS v3.1 LOCKED & SECURE."))
 	})
 
-	log.Printf("[*] SVPS v3.0 Running on port %s", port)
+	log.Printf("[*] SVPS v3.1 Running on port %s", port)
 	http.ListenAndServe(":"+port, nil)
 }
 
