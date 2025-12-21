@@ -1,0 +1,5 @@
+github.com/creack/pty v1.1.18 h2:S7RAU9632J6uS976iNoY2l9as78K+E525OAnwRvp69s=
+github.com/creack/pty v1.1.18/go.mod h2:7NfHkSwaN6H6N7DAn+Wf99OIn/m7u70o0uF7n7X02rM=
+github.com/gorilla/websocket v1.5.0 h2:PPjRUX2yHOvXXz3u8zWtz3m1fK/G7GqcbaS58F2pSGA=
+github.com/gorilla/websocket v1.5.0/go.mod h2:K64Y0699r89WAnk1uR2S8YIu67S00H/Y3V98D/O5z4k=
+
