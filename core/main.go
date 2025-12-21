@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -20,9 +19,11 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
+	// Ambil kunci dari Environment Variable
 	serverKey := os.Getenv("KEYS")
 	clientKey := r.Header.Get("X-SVPS-TOKEN")
 
+	// Validasi token
 	if serverKey == "" || clientKey != serverKey {
 		log.Printf("[!] Unauthorized access from: %s", r.RemoteAddr)
 		http.NotFound(w, r)
@@ -36,9 +37,11 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// Siapkan command bash
 	c := exec.Command("bash")
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
 
+	// Mulai PTY
 	f, err := pty.Start(c)
 	if err != nil {
 		log.Printf("[!] PTY Start error: %v", err)
@@ -46,7 +49,7 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	// Goroutine untuk membaca dari WebSocket dan menulis ke PTY
+	// Goroutine: Baca dari WebSocket -> Tulis ke Terminal (Input User)
 	go func() {
 		for {
 			_, message, err := conn.ReadMessage()
@@ -57,12 +60,13 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Membaca dari PTY dan menulis ke WebSocket
+	// Loop Utama: Baca dari Terminal -> Tulis ke WebSocket (Output Layar)
 	buf := make([]byte, 1024)
 	for {
 		n, err := f.Read(buf)
 		if err != nil {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\n[SVPS] Session Closed.\r\n"))
+			// Kirim sinyal tutup jika bash mati
+			conn.WriteMessage(websocket.TextMessage, []byte("\r\n[SVPS] Session Closed.\r\n"))
 			break
 		}
 		err = conn.WriteMessage(websocket.TextMessage, buf[:n])
