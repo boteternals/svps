@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,86 +11,101 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// KONSTANTA VERSI (Protocol Lock)
+const SVPS_PROTOCOL_VERSION = "3.0"
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
-	// Ambil kunci dari Environment Variable
-	serverKey := os.Getenv("KEYS")
-	clientKey := r.Header.Get("X-SVPS-TOKEN")
-
-	// Validasi token
-	if serverKey == "" || clientKey != serverKey {
-		log.Printf("[!] Unauthorized access from: %s", r.RemoteAddr)
-		http.NotFound(w, r)
+	// 1. CEK VERSI PROTOKOL (Wajib Update)
+	clientVersion := r.Header.Get("X-SVPS-VERSION")
+	if clientVersion != SVPS_PROTOCOL_VERSION {
+		log.Printf("[!] Version Mismatch. Client: %s, Server: %s", clientVersion, SVPS_PROTOCOL_VERSION)
+		http.Error(w, "CLIENT_OUTDATED_PLEASE_UPDATE", http.StatusUpgradeRequired) // Error 426
 		return
+	}
+
+	// 2. Ambil Config dari ENV (Sesuai Request Kamu)
+	serverPass := os.Getenv("PASS")     // Dulu KEYS
+	serverName := os.Getenv("NAMES")    // Username Default
+	serverAlias := os.Getenv("ALIASE")  // Hostname Palsu (Branding)
+
+	// Fallback jika lupa setting ENV
+	if serverName == "" { serverName = "root" }
+	if serverAlias == "" { serverAlias = "svps-box" }
+
+	// 3. Validasi Password
+	clientKey := r.Header.Get("X-SVPS-TOKEN")
+	if serverPass != "" && clientKey != serverPass { // Jika PASS kosong, anggap open (opsional) atau tolak
+		if serverPass != "" {
+			log.Printf("[!] Unauthorized access attempt from: %s", r.RemoteAddr)
+			http.NotFound(w, r) // Kasih 404 biar bingung
+			return
+		}
+	}
+
+	// 4. Tentukan Username Tampilan
+	// Priority: Request Client > ENV NAMES
+	clientRequestUser := r.Header.Get("X-SVPS-USER")
+	finalUser := serverName
+	if clientRequestUser != "" && clientRequestUser != "root" {
+		finalUser = clientRequestUser
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("[!] Upgrade error: %v", err)
-		return
-	}
+	if err != nil { return }
 	defer conn.Close()
 
-	// Siapkan command bash
+	// 5. MANIPULASI TAMPILAN PROMPT (THE MAGIC) 🪄
 	c := exec.Command("bash")
-	c.Env = append(os.Environ(), "TERM=xterm-256color")
+	
+	// Kita rakit PS1 secara manual.
+	// Format: [Hijau]User@[Ungu]Alias:[Biru]Path[Reset]$ 
+	// \w = Path (menampilkan ~ jika di home)
+	customPrompt := fmt.Sprintf("PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", finalUser, serverAlias)
 
-	// Mulai PTY
+	// Inject ke Environment
+	c.Env = append(os.Environ(), 
+		"TERM=xterm-256color",
+		"HOME=/root",
+		customPrompt, // Ini yang bikin hostname panjang hilang!
+	)
+
 	f, err := pty.Start(c)
-	if err != nil {
-		log.Printf("[!] PTY Start error: %v", err)
-		return
-	}
+	if err != nil { return }
 	defer f.Close()
 
-	// Goroutine: Baca dari WebSocket -> Tulis ke Terminal (Input User)
+	// Bridge WebSocket
 	go func() {
 		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			f.Write(message)
+			_, msg, err := conn.ReadMessage()
+			if err != nil { return }
+			f.Write(msg)
 		}
 	}()
 
-	// Loop Utama: Baca dari Terminal -> Tulis ke WebSocket (Output Layar)
 	buf := make([]byte, 1024)
 	for {
 		n, err := f.Read(buf)
-		if err != nil {
-			// Kirim sinyal tutup jika bash mati
-			conn.WriteMessage(websocket.TextMessage, []byte("\r\n[SVPS] Session Closed.\r\n"))
-			break
-		}
-		err = conn.WriteMessage(websocket.TextMessage, buf[:n])
-		if err != nil {
-			break
-		}
+		if err != nil { break }
+		conn.WriteMessage(websocket.TextMessage, buf[:n])
 	}
 }
 
 func main() {
 	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	if port == "" { port = "8080" }
 
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("SVPS Engine is active."))
+		w.Write([]byte("SVPS Secure Core v3.0"))
 	})
 
-	log.Printf("[*] SVPS Engine running on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal(err)
-	}
+	log.Printf("[*] SVPS v3.0 Running on port %s", port)
+	http.ListenAndServe(":"+port, nil)
 }
 
