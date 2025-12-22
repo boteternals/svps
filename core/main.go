@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "6.6-ULTRA"
+	SVPS_VERSION = "6.7-ULTRA"
 	APP_PORT     = "3000"
 	LICENSE      = "Licensed by Eternals"
 	EMAIL        = "helpme.eternals@gmail.com"
@@ -53,7 +53,7 @@ func getBanner() string {
 		"                            '8>                  \r\n" +
 		"                             \"                   \r\n"
 
-	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | PASSIVE-VERIFY: ENABLED\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
+	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | COLLISION-AWARE: ENABLED\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
 		SVPS_VERSION, LICENSE, runtime.NumCPU(), EMAIL)
 	
 	return ascii + info
@@ -114,11 +114,13 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 
 	sessionMux.Lock()
 	if isBusy && activeConn != nil {
-		err := activeConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(1*time.Second))
+		activeConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		err := activeConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(400 * time.Millisecond))
+		
 		if err != nil {
 			activeConn.Close()
 			isBusy = false
-			log.Println("[ULTRA] Stale session cleared.")
+			log.Println("[ULTRA] Stale session auto-cleared.")
 		} else {
 			sessionMux.Unlock()
 			http.Error(w, "SERVER BUSY", 429)
