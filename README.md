@@ -13,24 +13,24 @@
 ## 🔥 Fitur Utama
 
 ### Server Side (Engine)
-* **[span_0](start_span)NITRO Mode:** Memaksa runtime Go menggunakan seluruh `numCPU` yang tersedia dan menaikkan `ulimit` ke 65535[span_0](end_span).
-* **[span_1](start_span)Heartbeat System:** Melakukan *self-ping* setiap 2 menit untuk mencegah penyedia hosting mematikan kontainer karena *idling*[span_1](end_span).
+* **(start_span)NITRO Mode:** Memaksa runtime Go menggunakan seluruh `numCPU` yang tersedia dan menaikkan `ulimit` ke 65535(end_span).
+* **(start_span)Heartbeat System:** Melakukan *self-ping* setiap 2 menit untuk mencegah penyedia hosting mematikan kontainer karena *idling*(end_span).
 * **Dual Face Architecture:**
     * `GET /`: Reverse Proxy ke aplikasi lokal (port 3000) atau tampilan status sistem.
-    * [span_2](start_span)`WS /sussh`: Jalur masuk WebSocket Shell terenkripsi[span_2](end_span).
-* **[span_3](start_span)Full PTY Support:** Mendukung `vim`, `htop`, `nano`, dan interaksi terminal penuh[span_3](end_span).
+    * (start_span)`WS /sussh`: Jalur masuk WebSocket Shell terenkripsi(end_span).
+* **(start_span)Full PTY Support:** Mendukung `vim`, `htop`, `nano`, dan interaksi terminal penuh(end_span).
 
 ### Client Side (Sussh)
-* **[span_4](start_span)Smart Paste:** Mendukung copy-paste teks panjang (hingga 4KB chunk) tanpa lag atau karakter hilang[span_4](end_span).
-* **[span_5](start_span)File Upload:** Transfer file dari lokal ke server tanpa SCP/FTP, murni via WebSocket stream[span_5](end_span).
-* **[span_6](start_span)Profile Manager:** Simpan target dan kredensial untuk akses cepat[span_6](end_span).
+* **(start_span)Smart Paste:** Mendukung copy-paste teks panjang (hingga 4KB chunk) tanpa lag atau karakter hilang(end_span).
+* **(start_span)File Upload:** Transfer file dari lokal ke server tanpa SCP/FTP, murni via WebSocket stream(end_span).
+* **(start_span)Profile Manager:** Simpan target dan kredensial untuk akses cepat(end_span).
 
 ---
 
 ## 🛠️ Instalasi & Deployment
 
 ### 1. Server (Deploy ke PaaS)
-Gunakan `Dockerfile` yang tersedia. [span_7](start_span)Kontainer berbasis `ubuntu:22.04` dan sudah menyertakan `curl`, `git`, `vim`, `htop`, dll[span_7](end_span).
+Gunakan `Dockerfile` yang tersedia. (start_span)Kontainer berbasis `ubuntu:22.04` dan sudah menyertakan `curl`, `git`, `vim`, `htop`, dll(end_span).
 
 **Wajib Set Environment Variables:**
 Agar SVPS berjalan aman dan sesuai identitasmu, atur variabel berikut di dashboard hostingmu (Zeabur/Railway/dll):
@@ -43,7 +43,7 @@ Agar SVPS berjalan aman dan sesuai identitasmu, atur variabel berikut di dashboa
 | `PORT` | Tidak | Port aplikasi berjalan. | `8080` |
 
 Cntoh Tampilan Terminal jika `NAMES=Xycan` dan `ALIASE=Eternals`:
-[span_8](start_span)`Xycan@Eternals:~/ $`[span_8](end_span)
+(start_span)`Xycan@Eternals:~/ $`(end_span)
 
 ### 2. Client (Local Machine)
 Pastikan Python 3 terinstal, lalu instal `sussh` client:
@@ -98,3 +98,15 @@ Done
 🛡️ Disclaimer
 Tool ini dibuat oleh Eternals untuk tujuan edukasi dan administrasi sistem secara efisien. Penggunaan untuk aktivitas ilegal di luar tanggung jawab pembuat.
 Powered by Eternals|Vlazars.
+
+<p align="center">
+  <a href="https://www.tiktok.com/@anakkecil_s">
+    <img src="https://img.shields.io/badge/TikTok-%23000000.svg?style=for-the-badge&logo=TikTok&logoColor=white" />
+  </a>
+  <a href="mailto:helpme.eternals@gmail.com">
+    <img src="https://img.shields.io/badge/Email-D14836?style=for-the-badge&logo=gmail&logoColor=white" />
+  </a>
+  <a href="https://whatsapp.com/channel/0029VaZLpqf8aKvHckUi4f1z">
+    <img src="https://img.shields.io/badge/WhatsApp_Channel-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
+  </a>
+</p>

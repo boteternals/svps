@@ -21,15 +21,15 @@ WORKDIR /root
 EXPOSE 8080
 CMD ["svps-server"]
 
-r /svps-server /usr/local/bin/svps-server
+COPY --from=builder /svps-server /usr/local/bin/svps-server
 RUN chmod +x /usr/local/bin/svps-server
 
-# Konfigurasi Terminal
 ENV TERM=xterm-256color
 ENV SHELL=/bin/bash
 WORKDIR /root
 
-# Jalankan SVPS
 EXPOSE 8080
+CMD ["svps-server"]
+
 CMD ["svps-server"]
 
