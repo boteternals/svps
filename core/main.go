@@ -19,18 +19,19 @@ import (
 )
 
 const (
-	SVPS_VERSION = "6.3"
+	SVPS_VERSION = "6.6-ULTRA"
 	APP_PORT     = "3000"
 	LICENSE      = "Licensed by Eternals"
 	EMAIL        = "helpme.eternals@gmail.com"
 )
 
 var (
-	isBusy     bool
-	sessionMux sync.Mutex
-	upgrader   = websocket.Upgrader{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
+	isBusy      bool
+	activeConn  *websocket.Conn
+	sessionMux  sync.Mutex
+	upgrader    = websocket.Upgrader{
+		ReadBufferSize:  8192,
+		WriteBufferSize: 8192,
 		CheckOrigin:     func(r *http.Request) bool { return true },
 	}
 )
@@ -52,7 +53,7 @@ func getBanner() string {
 		"                            '8>                  \r\n" +
 		"                             \"                   \r\n"
 
-	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | Runtime: Optimized\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
+	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | PASSIVE-VERIFY: ENABLED\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
 		SVPS_VERSION, LICENSE, runtime.NumCPU(), EMAIL)
 	
 	return ascii + info
@@ -70,17 +71,14 @@ echo -e "\e[1;32m[DONE] Restored. Please relogin shell.\e[0m"
 }
 
 func optimizeSystem() {
-	numCPU := runtime.NumCPU()
-	runtime.GOMAXPROCS(numCPU)
-	log.Printf("[NITRO] Detected %d CPU Cores", numCPU)
-
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	var rLimit syscall.Rlimit
-	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-	if err == nil {
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err == nil {
 		rLimit.Cur = 65535
 		rLimit.Max = 65535
 		_ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	}
+	log.Printf("[NITRO] System Overclocked: %d Cores", runtime.NumCPU())
 }
 
 func startHeartbeat(port string) {
@@ -115,34 +113,41 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionMux.Lock()
-	if isBusy {
-		sessionMux.Unlock()
-		http.Error(w, "SERVER BUSY: ANOTHER USER IS CONNECTED", 429)
-		return
+	if isBusy && activeConn != nil {
+		err := activeConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(1*time.Second))
+		if err != nil {
+			activeConn.Close()
+			isBusy = false
+			log.Println("[ULTRA] Stale session cleared.")
+		} else {
+			sessionMux.Unlock()
+			http.Error(w, "SERVER BUSY", 429)
+			return
+		}
 	}
 	isBusy = true
 	sessionMux.Unlock()
-
-	defer func() {
-		sessionMux.Lock()
-		isBusy = false
-		sessionMux.Unlock()
-	}()
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+
+	sessionMux.Lock()
+	activeConn = conn
+	sessionMux.Unlock()
+
+	defer func() {
+		sessionMux.Lock()
+		activeConn = nil
+		isBusy = false
+		sessionMux.Unlock()
+	}()
 
 	name := os.Getenv("NAMES")
-	if name == "" {
-		name = "ROOT"
-	}
+	if name == "" { name = "ROOT" }
 	alias := os.Getenv("ALIASE")
-	if alias == "" {
-		alias = "VPS"
-	}
+	if alias == "" { alias = "VPS" }
 
 	ps1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", name, alias)
 	f, err := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -171,7 +176,7 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	buf := make([]byte, 4096)
+	buf := make([]byte, 8192)
 	for {
 		n, err := fPty.Read(buf)
 		if err != nil {
@@ -195,7 +200,7 @@ func main() {
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", handleProxy)
 
-	log.Printf("[*] SVPS %s Engine Started on port %s", SVPS_VERSION, port)
+	log.Printf("[*] SVPS %s Engine Active on port %s", SVPS_VERSION, port)
 	_ = http.ListenAndServe(":"+port, nil)
 }
 
