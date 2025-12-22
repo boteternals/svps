@@ -100,7 +100,7 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	if err != nil { return }
 	defer fPty.Close()
 
-	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO MODE ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
 
 	go func() {
 		for {
@@ -129,6 +129,8 @@ func main() {
 
 	log.Printf("[*] SVPS %s Running on port %s", SVPS_VERSION, port)
 	http.ListenAndServe(":"+port, nil)
+}
+l)
 }
 
 )

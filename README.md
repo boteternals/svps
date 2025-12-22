@@ -10,27 +10,27 @@
 
 ---
 
-## 🔥 Fitur Utama
+## Fitur Utama
 
 ### Server Side (Engine)
-* **(start_span)NITRO Mode:** Memaksa runtime Go menggunakan seluruh `numCPU` yang tersedia dan menaikkan `ulimit` ke 65535(end_span).
-* **(start_span)Heartbeat System:** Melakukan *self-ping* setiap 2 menit untuk mencegah penyedia hosting mematikan kontainer karena *idling*(end_span).
+* **NITRO Mode:** Memaksa runtime Go menggunakan seluruh `numCPU` yang tersedia dan menaikkan `ulimit` ke 65535.
+* **Heartbeat System:** Melakukan *self-ping* setiap 2 menit untuk mencegah penyedia hosting mematikan kontainer karena *idling*.
 * **Dual Face Architecture:**
     * `GET /`: Reverse Proxy ke aplikasi lokal (port 3000) atau tampilan status sistem.
-    * (start_span)`WS /sussh`: Jalur masuk WebSocket Shell terenkripsi(end_span).
-* **(start_span)Full PTY Support:** Mendukung `vim`, `htop`, `nano`, dan interaksi terminal penuh(end_span).
+    * `WS /sussh`: Jalur masuk WebSocket Shell terenkripsi.
+* **Full PTY Support:** Mendukung `vim`, `htop`, `nano`, dan interaksi terminal penuh.
 
 ### Client Side (Sussh)
-* **(start_span)Smart Paste:** Mendukung copy-paste teks panjang (hingga 4KB chunk) tanpa lag atau karakter hilang(end_span).
-* **(start_span)File Upload:** Transfer file dari lokal ke server tanpa SCP/FTP, murni via WebSocket stream(end_span).
-* **(start_span)Profile Manager:** Simpan target dan kredensial untuk akses cepat(end_span).
+* **Smart Paste:** Mendukung copy-paste teks panjang (hingga 4KB chunk) tanpa lag atau karakter hilang.
+* **File Upload:** Transfer file dari lokal ke server tanpa SCP/FTP, murni via WebSocket stream.
+* **Profile Manager:** Simpan target dan kredensial untuk akses cepat.
 
 ---
 
-## 🛠️ Instalasi & Deployment
+## Instalasi & Deployment
 
 ### 1. Server (Deploy ke PaaS)
-Gunakan `Dockerfile` yang tersedia. (start_span)Kontainer berbasis `ubuntu:22.04` dan sudah menyertakan `curl`, `git`, `vim`, `htop`, dll(end_span).
+Gunakan `Dockerfile` yang tersedia. Kontainer berbasis `ubuntu:22.04` dan sudah menyertakan `curl`, `git`, `vim`, `htop`, dll.
 
 **Wajib Set Environment Variables:**
 Agar SVPS berjalan aman dan sesuai identitasmu, atur variabel berikut di dashboard hostingmu (Zeabur/Railway/dll):
@@ -43,7 +43,7 @@ Agar SVPS berjalan aman dan sesuai identitasmu, atur variabel berikut di dashboa
 | `PORT` | Tidak | Port aplikasi berjalan. | `8080` |
 
 Cntoh Tampilan Terminal jika `NAMES=Xycan` dan `ALIASE=Eternals`:
-(start_span)`Xycan@Eternals:~/ $`(end_span)
+`Xycan@Eternals:~/ $`
 
 ### 2. Client (Local Machine)
 Pastikan Python 3 terinstal, lalu instal `sussh` client:
@@ -54,7 +54,8 @@ pip install itssussh
 ```
 
 Dependencies: websocket-client
-🚀 Cara Penggunaan
+
+#### Cara Penggunaan
 Connect ke SVPS
 Setelah server aktif dan Environment Variable diset, jalankan perintah berikut di terminal lokalmu:
 Cara Langsung:
@@ -74,7 +75,7 @@ Select:
 >
 ```
 
-Upload File
+#### Upload File
 Pilih opsi U pada menu atau gunakan mode upload. File akan diubah ke base64 dan direkonstruksi ulang di server secara otomatis.
 ```
 > Local path: /home/user/script.py
@@ -83,7 +84,7 @@ Uploading...
 Done
 ```
 
-⚠️ Struktur Direktori
+⚠️ Struktur sussh tools ⚠️
 ```
 ├── Dockerfile          # Multi-stage build (Go Builder - Ubuntu Runtime)
 ├── go.mod              # Go Dependencies
@@ -95,7 +96,7 @@ Done
 └── setup.py            # Instller Client
 ```
 
-🛡️ Disclaimer
+🛡️ Disclaimer 🛡
 Tool ini dibuat oleh Eternals untuk tujuan edukasi dan administrasi sistem secara efisien. Penggunaan untuk aktivitas ilegal di luar tanggung jawab pembuat.
 Powered by Eternals|Vlazars.
 
