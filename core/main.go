@@ -37,7 +37,7 @@ func optimizeSystem() {
 		rLimit.Cur = 65535
 		rLimit.Max = 65535
 		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-		log.Printf("[NITRO] Ulimit raised to 65535")
+		log.Printf("[NITRO] Ulimit raised to 65535 (Game Server Ready)")
 	}
 }
 
@@ -100,7 +100,7 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	if err != nil { return }
 	defer fPty.Close()
 
-	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO MODE ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
 
 	go func() {
 		for {
@@ -122,47 +122,6 @@ func main() {
 
 	port := os.Getenv("PORT"); if port == "" { port = "8080" }
 
-	startHeartbeat(port)
-
-	http.HandleFunc("/sussh", handleSussh)
-	http.HandleFunc("/", handleProxy)
-
-	log.Printf("[*] SVPS %s Running on port %s", SVPS_VERSION, port)
-	http.ListenAndServe(":"+port, nil)
-}
-l)
-}
-
-)
-	if err != nil { return }
-	defer fPty.Close()
-
-	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO MODE ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
-
-	// Goroutine terpisah untuk Read/Write agar Full Duplex
-	go func() {
-		for {
-			_, msg, err := conn.ReadMessage(); if err != nil { return }
-			fPty.Write(msg)
-		}
-	}()
-	
-	// Gunakan Buffer yang efisien
-	buf := make([]byte, 4096) // Buffer besar
-	for {
-		n, err := fPty.Read(buf)
-		if err != nil { break }
-		conn.WriteMessage(websocket.TextMessage, buf[:n])
-	}
-}
-
-func main() {
-	// 1. Jalankan Optimasi Sistem saat Start
-	optimizeSystem()
-
-	port := os.Getenv("PORT"); if port == "" { port = "8080" }
-
-	// 2. Aktifkan Jantung Buatan
 	startHeartbeat(port)
 
 	http.HandleFunc("/sussh", handleSussh)
