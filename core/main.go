@@ -20,50 +20,40 @@ import (
 const SVPS_VERSION = "6.0-NITRO"
 const APP_PORT = "3000"
 
-// OPTIMASI 1: Buffer Besar untuk WebSocket (Ngebut & Stabil)
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096, // Naik dari 1024
-	WriteBufferSize: 4096, // Naik dari 1024
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// --- FUNGSI TUNING SYSTEM ---
 func optimizeSystem() {
-	// 1. CPU HOGGING: Paksa pakai semua Core yang ada
 	numCPU := runtime.NumCPU()
 	runtime.GOMAXPROCS(numCPU)
 	log.Printf("[NITRO] Detected %d CPU Cores. Maximizing usage...", numCPU)
 
-	// 2. LIMIT BREAK: Naikkan batas File Descriptor (Penting buat Game Server)
 	var rLimit syscall.Rlimit
 	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	if err == nil {
-		rLimit.Cur = 65535 // Set ke Max (biasanya default cuma 1024)
+		rLimit.Cur = 65535
 		rLimit.Max = 65535
 		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-		log.Printf("[NITRO] Ulimit raised to 65535 (Game Server Ready)")
+		log.Printf("[NITRO] Ulimit raised to 65535")
 	}
 }
 
-// --- FUNGSI HEARTBEAT (ANTI SLEEP) ---
 func startHeartbeat(port string) {
-	// Ping diri sendiri setiap 2 menit agar dikira sibuk
 	ticker := time.NewTicker(2 * time.Minute)
 	go func() {
 		for range ticker.C {
-			// Kita request ke localhost sendiri
 			http.Get(fmt.Sprintf("http://127.0.0.1:%s/", port))
-			// Log disembunyikan biar gak nyampah, tapi traffic jalan
 		}
 	}()
 	log.Println("[NITRO] Heartbeat System Active (Anti-Sleep Mode On)")
 }
 
-// --- FUNGSI PROXY (Optimized) ---
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	targetURL, _ := url.Parse("http://127.0.0.1:" + APP_PORT)
 	
-	// Fast Check (Timeout dipercepat biar responsif)
 	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+APP_PORT, 50*time.Millisecond)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html")
@@ -78,9 +68,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.Close()
 
-	// Reverse Proxy dengan Buffer Recycling (Hemat RAM)
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	// Matikan log error proxy biar gak panik kalau user disconnect
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {}
 	
 	r.Header.Set("X-Forwarded-Host", r.Header.Get("Host"))
@@ -88,7 +76,6 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// --- FUNGSI TERMINAL (Secure & Persistent) ---
 func handleSussh(w http.ResponseWriter, r *http.Request) {
 	serverPass := os.Getenv("PASS")
 	if serverPass == "" || r.Header.Get("X-SVPS-TOKEN") != serverPass {
@@ -110,6 +97,41 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	c := exec.Command("bash")
 	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root")
 	fPty, err := pty.Start(c)
+	if err != nil { return }
+	defer fPty.Close()
+
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO MODE ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
+
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage(); if err != nil { return }
+			fPty.Write(msg)
+		}
+	}()
+	
+	buf := make([]byte, 4096)
+	for {
+		n, err := fPty.Read(buf)
+		if err != nil { break }
+		conn.WriteMessage(websocket.TextMessage, buf[:n])
+	}
+}
+
+func main() {
+	optimizeSystem()
+
+	port := os.Getenv("PORT"); if port == "" { port = "8080" }
+
+	startHeartbeat(port)
+
+	http.HandleFunc("/sussh", handleSussh)
+	http.HandleFunc("/", handleProxy)
+
+	log.Printf("[*] SVPS %s Running on port %s", SVPS_VERSION, port)
+	http.ListenAndServe(":"+port, nil)
+}
+
+)
 	if err != nil { return }
 	defer fPty.Close()
 
