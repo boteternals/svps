@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,14 +18,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const SVPS_VERSION = "6.0-NITRO"
+const SVPS_VERSION = "6.1-NITRO-EXCLUSIVE"
 const APP_PORT = "3000"
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
+var (
+	isBusy     bool
+	sessionMux sync.Mutex
+	upgrader   = websocket.Upgrader{
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin:     func(r *http.Request) bool { return true },
+	}
+)
 
 func optimizeSystem() {
 	numCPU := runtime.NumCPU()
@@ -83,28 +88,59 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionMux.Lock()
+	if isBusy {
+		sessionMux.Unlock()
+		http.Error(w, "SERVER BUSY: ANOTHER USER IS CONNECTED", 429)
+		return
+	}
+	isBusy = true
+	sessionMux.Unlock()
+
+	defer func() {
+		sessionMux.Lock()
+		isBusy = false
+		sessionMux.Unlock()
+	}()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 	defer conn.Close()
 
-	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
-	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
+	name := os.Getenv("NAMES")
+	if name == "" {
+		name = "ROOT"
+	}
+	alias := os.Getenv("ALIASE")
+	if alias == "" {
+		alias = "VPS"
+	}
 	
 	ps1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", name, alias)
 	f, _ := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if f != nil { f.WriteString("\n" + ps1 + "\n"); f.Close() }
+	if f != nil {
+		f.WriteString("\n" + ps1 + "\n")
+		f.Close()
+	}
 
 	c := exec.Command("bash")
 	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root")
 	fPty, err := pty.Start(c)
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 	defer fPty.Close()
 
-	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | NITRO MODE ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n\033[1;31m[SVPS %s] CPU: %d Cores | EXCLUSIVE SESSION ACTIVE\033[0m\r\n", SVPS_VERSION, runtime.NumCPU())))
 
 	go func() {
 		for {
-			_, msg, err := conn.ReadMessage(); if err != nil { return }
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
 			fPty.Write(msg)
 		}
 	}()
@@ -112,7 +148,9 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := fPty.Read(buf)
-		if err != nil { break }
+		if err != nil {
+			break
+		}
 		conn.WriteMessage(websocket.TextMessage, buf[:n])
 	}
 }
@@ -120,7 +158,10 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 func main() {
 	optimizeSystem()
 
-	port := os.Getenv("PORT"); if port == "" { port = "8080" }
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
 	startHeartbeat(port)
 
