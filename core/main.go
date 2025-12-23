@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "7.1"
+	SVPS_VERSION = "7.2-SECURE"
 	APP_PORT     = "3000"
 	HIST_SIZE    = 16 * 1024
 	PING_INT     = 10 * time.Second
@@ -106,7 +106,6 @@ func GetSession(id string) *Session {
 	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
 	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
 	
-	// FIX PROMPT: Paksa tulis ke .bashrc agar prompt sesuai keinginan
 	f, err := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		ps1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", name, alias)
@@ -158,7 +157,17 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	sess := GetSession(sid)
 	if sess == nil { conn.Close(); return }
 
+	// === SECURITY CHECK: SINGLE USER LOCK ===
 	sess.Lock.Lock()
+	if len(sess.Clients) > 0 {
+		// Jika sudah ada user di sesi ini, TOLAK yang baru!
+		sess.Lock.Unlock()
+		conn.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SESSION LOCKED: Another user is active.\r\n"))
+		conn.Close()
+		return
+	}
+	// ========================================
+
 	sess.Clients[conn] = true
 	conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
 	conn.WriteMessage(websocket.TextMessage, sess.History.Bytes())
