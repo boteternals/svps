@@ -20,10 +20,8 @@ import (
 )
 
 const (
-	SVPS_VERSION = "7.0-ETERNAL"
+	SVPS_VERSION = "7.1"
 	APP_PORT     = "3000"
-	LICENSE      = "Licensed by Eternals"
-	EMAIL        = "helpme.eternals@gmail.com"
 	HIST_SIZE    = 16 * 1024
 	PING_INT     = 10 * time.Second
 )
@@ -65,21 +63,10 @@ func getBanner() string {
 		"                            '8>                  \r\n" +
 		"                             \"                   \r\n"
 
-	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | MODE: GHOST-SHELL (IMMORTAL)\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
-		SVPS_VERSION, LICENSE, runtime.NumCPU(), EMAIL)
+	info := fmt.Sprintf("\r\n  SVPS %s | Licensed by Eternals\r\n  CPU: %d Cores\r\n  Support: helpme.eternals@gmail.com\r\n  --------------------------------------------------\r\n",
+		SVPS_VERSION, runtime.NumCPU())
 	
 	return ascii + info
-}
-
-func injectEternalCommands() {
-	script := `#!/bin/bash
-echo -e "\e[1;33m[RECOVERY] Restoring environment...\e[0m"
-name=${NAMES:-ROOT}
-alias=${ALIASE:-VPS}
-echo "export PS1='\[\033[01;32m\]$name@$alias\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '" > /root/.bashrc
-echo -e "\e[1;32m[DONE] Restored. Please relogin shell.\e[0m"
-`
-	_ = os.WriteFile("/usr/local/bin/nitro-fix", []byte(script), 0755)
 }
 
 func optimizeSystem() {
@@ -89,7 +76,6 @@ func optimizeSystem() {
 		rLimit.Cur = 65535; rLimit.Max = 65535
 		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	}
-	log.Printf("[NITRO] System Overclocked: %d Cores", runtime.NumCPU())
 }
 
 func (s *Session) Broadcast(data []byte) {
@@ -120,9 +106,16 @@ func GetSession(id string) *Session {
 	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
 	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
 	
+	// FIX PROMPT: Paksa tulis ke .bashrc agar prompt sesuai keinginan
+	f, err := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		ps1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", name, alias)
+		f.WriteString("\n" + ps1 + "\n")
+		f.Close()
+	}
+
 	c := exec.Command("bash")
-	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root",
-		fmt.Sprintf("PS1=\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", name, alias))
+	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root")
 	
 	fPty, err := pty.Start(c)
 	if err != nil { return nil }
@@ -153,7 +146,7 @@ func GetSession(id string) *Session {
 func handleSussh(w http.ResponseWriter, r *http.Request) {
 	pass := os.Getenv("PASS")
 	if pass != "" && r.Header.Get("X-SVPS-TOKEN") != pass {
-		http.Error(w, "ACCESS DENIED", 403); return
+		http.Error(w, "", 403); return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -206,16 +199,13 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		c.Close()
 		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 	} else {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<html><body style='background:#000;color:#0f0;font-family:monospace;text-align:center;padding-top:20vh;'>"+
-			"<h1>SVPS %s</h1><p>Status: GHOST ACTIVE</p></body></html>", SVPS_VERSION)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "SVPS %s READY", SVPS_VERSION)
 	}
 }
 
 func main() {
 	optimizeSystem()
-	injectEternalCommands()
-
 	port := os.Getenv("PORT"); if port == "" { port = "8080" }
 
 	go func() {
@@ -228,6 +218,7 @@ func main() {
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", handleProxy)
 
-	log.Printf("[*] SVPS %s Engine Active on port %s", SVPS_VERSION, port)
+	log.Printf("Listening on %s", port)
 	http.ListenAndServe(":"+port, nil)
 }
+
