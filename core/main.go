@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -19,16 +20,27 @@ import (
 )
 
 const (
-	SVPS_VERSION = "6.7-ULTRA"
+	SVPS_VERSION = "7.0-ETERNAL"
 	APP_PORT     = "3000"
 	LICENSE      = "Licensed by Eternals"
 	EMAIL        = "helpme.eternals@gmail.com"
+	HIST_SIZE    = 16 * 1024
+	PING_INT     = 10 * time.Second
 )
 
+type Session struct {
+	ID        string
+	PTY       *os.File
+	Cmd       *exec.Cmd
+	History   *bytes.Buffer
+	Clients   map[*websocket.Conn]bool
+	Lock      sync.Mutex
+	ActiveAt  time.Time
+}
+
 var (
-	isBusy      bool
-	activeConn  *websocket.Conn
-	sessionMux  sync.Mutex
+	sessions    = make(map[string]*Session)
+	sessLock    sync.Mutex
 	upgrader    = websocket.Upgrader{
 		ReadBufferSize:  8192,
 		WriteBufferSize: 8192,
@@ -53,7 +65,7 @@ func getBanner() string {
 		"                            '8>                  \r\n" +
 		"                             \"                   \r\n"
 
-	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | COLLISION-AWARE: ENABLED\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
+	info := fmt.Sprintf("\r\n  SVPS %s | %s\r\n  CPU: %d Cores | MODE: GHOST-SHELL (IMMORTAL)\r\n  Support: %s\r\n  --------------------------------------------------\r\n",
 		SVPS_VERSION, LICENSE, runtime.NumCPU(), EMAIL)
 	
 	return ascii + info
@@ -74,117 +86,129 @@ func optimizeSystem() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	var rLimit syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err == nil {
-		rLimit.Cur = 65535
-		rLimit.Max = 65535
-		_ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+		rLimit.Cur = 65535; rLimit.Max = 65535
+		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	}
 	log.Printf("[NITRO] System Overclocked: %d Cores", runtime.NumCPU())
 }
 
-func startHeartbeat(port string) {
-	ticker := time.NewTicker(2 * time.Minute)
-	go func() {
-		for range ticker.C {
-			_, _ = http.Get(fmt.Sprintf("http://127.0.0.1:%s/", port))
+func (s *Session) Broadcast(data []byte) {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	
+	if s.History.Len()+len(data) > HIST_SIZE {
+		s.History.Reset()
+	}
+	s.History.Write(data)
+
+	for conn := range s.Clients {
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			conn.Close()
+			delete(s.Clients, conn)
 		}
-	}()
+	}
+	s.ActiveAt = time.Now()
 }
 
-func handleProxy(w http.ResponseWriter, r *http.Request) {
-	targetURL, _ := url.Parse("http://127.0.0.1:" + APP_PORT)
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+APP_PORT, 50*time.Millisecond)
-	if err != nil {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "<html><body style='background:#000;color:#0f0;font-family:monospace;text-align:center;padding-top:20vh;'>"+
-			"<h1>SVPS %s</h1><p>Status: ACTIVE</p></body></html>", SVPS_VERSION)
-		return
+func GetSession(id string) *Session {
+	sessLock.Lock()
+	defer sessLock.Unlock()
+
+	if s, ok := sessions[id]; ok { return s }
+
+	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
+	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
+	
+	c := exec.Command("bash")
+	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root",
+		fmt.Sprintf("PS1=\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ", name, alias))
+	
+	fPty, err := pty.Start(c)
+	if err != nil { return nil }
+
+	sess := &Session{
+		ID: id, PTY: fPty, Cmd: c,
+		History: bytes.NewBuffer(make([]byte, 0, HIST_SIZE)),
+		Clients: make(map[*websocket.Conn]bool),
+		ActiveAt: time.Now(),
 	}
-	conn.Close()
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.ServeHTTP(w, r)
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := fPty.Read(buf)
+			if err != nil {
+				sessLock.Lock(); delete(sessions, id); sessLock.Unlock()
+				fPty.Close(); return
+			}
+			sess.Broadcast(buf[:n])
+		}
+	}()
+
+	sessions[id] = sess
+	return sess
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
-	serverPass := os.Getenv("PASS")
-	token := r.Header.Get("X-SVPS-TOKEN")
-	if serverPass == "" || token != serverPass {
-		http.Error(w, "ACCESS DENIED", 403)
-		return
+	pass := os.Getenv("PASS")
+	if pass != "" && r.Header.Get("X-SVPS-TOKEN") != pass {
+		http.Error(w, "ACCESS DENIED", 403); return
 	}
-
-	sessionMux.Lock()
-	if isBusy && activeConn != nil {
-		activeConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-		err := activeConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(400 * time.Millisecond))
-		
-		if err != nil {
-			activeConn.Close()
-			isBusy = false
-			log.Println("[ULTRA] Stale session auto-cleared.")
-		} else {
-			sessionMux.Unlock()
-			http.Error(w, "SERVER BUSY", 429)
-			return
-		}
-	}
-	isBusy = true
-	sessionMux.Unlock()
 
 	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
+	if err != nil { return }
 
-	sessionMux.Lock()
-	activeConn = conn
-	sessionMux.Unlock()
+	sid := r.Header.Get("X-SESSION-ID")
+	if sid == "" { sid = "main" }
 
-	defer func() {
-		sessionMux.Lock()
-		activeConn = nil
-		isBusy = false
-		sessionMux.Unlock()
-	}()
+	sess := GetSession(sid)
+	if sess == nil { conn.Close(); return }
 
-	name := os.Getenv("NAMES")
-	if name == "" { name = "ROOT" }
-	alias := os.Getenv("ALIASE")
-	if alias == "" { alias = "VPS" }
+	sess.Lock.Lock()
+	sess.Clients[conn] = true
+	conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
+	conn.WriteMessage(websocket.TextMessage, sess.History.Bytes())
+	sess.Lock.Unlock()
 
-	ps1 := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '", name, alias)
-	f, err := os.OpenFile("/root/.bashrc", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err == nil {
-		f.WriteString("\n" + ps1 + "\n")
-		f.Close()
-	}
-
-	c := exec.Command("bash")
-	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root")
-	fPty, err := pty.Start(c)
-	if err != nil {
-		return
-	}
-	defer fPty.Close()
-
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
-
+	exit := make(chan bool)
 	go func() {
+		tk := time.NewTicker(PING_INT)
+		defer tk.Stop()
 		for {
-			_, msg, err := conn.ReadMessage()
-			if err != nil {
-				return
+			select {
+			case <-tk.C:
+				sess.Lock.Lock()
+				if _, ok := sess.Clients[conn]; !ok { sess.Lock.Unlock(); return }
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					sess.Lock.Unlock(); return
+				}
+				sess.Lock.Unlock()
+			case <-exit: return
 			}
-			fPty.Write(msg)
 		}
 	}()
 
-	buf := make([]byte, 8192)
 	for {
-		n, err := fPty.Read(buf)
-		if err != nil {
-			break
-		}
-		_ = conn.WriteMessage(websocket.TextMessage, buf[:n])
+		_, msg, err := conn.ReadMessage()
+		if err != nil { break }
+		if sess.PTY != nil { sess.PTY.Write(msg) }
+	}
+
+	close(exit)
+	sess.Lock.Lock(); delete(sess.Clients, conn); sess.Lock.Unlock()
+}
+
+func handleProxy(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse("http://127.0.0.1:" + APP_PORT)
+	if c, err := net.DialTimeout("tcp", u.Host, 100*time.Millisecond); err == nil {
+		c.Close()
+		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
+	} else {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<html><body style='background:#000;color:#0f0;font-family:monospace;text-align:center;padding-top:20vh;'>"+
+			"<h1>SVPS %s</h1><p>Status: GHOST ACTIVE</p></body></html>", SVPS_VERSION)
 	}
 }
 
@@ -192,17 +216,18 @@ func main() {
 	optimizeSystem()
 	injectEternalCommands()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	port := os.Getenv("PORT"); if port == "" { port = "8080" }
 
-	startHeartbeat(port)
+	go func() {
+		for {
+			time.Sleep(2 * time.Minute)
+			http.Get(fmt.Sprintf("http://127.0.0.1:%s/", port))
+		}
+	}()
 
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", handleProxy)
 
 	log.Printf("[*] SVPS %s Engine Active on port %s", SVPS_VERSION, port)
-	_ = http.ListenAndServe(":"+port, nil)
+	http.ListenAndServe(":"+port, nil)
 }
-
