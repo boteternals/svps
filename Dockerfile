@@ -9,6 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     bash curl git vim htop wget sudo net-tools iputils-ping \
+    python3 python3-pip nano tmux screen \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /svps-server /usr/local/bin/svps-server
