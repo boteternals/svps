@@ -1,4 +1,3 @@
-
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
 COPY . .
@@ -10,7 +9,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     bash curl git vim htop wget sudo net-tools iputils-ping \
-    python3 python3-pip nano \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /svps-server /usr/local/bin/svps-server
@@ -18,23 +16,8 @@ RUN chmod +x /usr/local/bin/svps-server
 
 ENV TERM=xterm-256color
 ENV SHELL=/bin/bash
-
 WORKDIR /root
 
 EXPOSE 8080
-CMD ["svps-server"]
-ironment Setup
-ENV TERM=xterm-256color
-ENV SHELL=/bin/bash
-WORKDIR /root
-
-# Expose & Run
-EXPOSE 8080
-CMD ["svps-server"]
-/root
-
-EXPOSE 8080
-CMD ["svps-server"]
-
 CMD ["svps-server"]
 
