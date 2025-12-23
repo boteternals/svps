@@ -20,10 +20,12 @@ import (
 )
 
 const (
-	SVPS_VERSION = "7.2-SECURE"
+	SVPS_VERSION = "7.5-SENTINEL"
 	APP_PORT     = "3000"
 	HIST_SIZE    = 16 * 1024
 	PING_INT     = 10 * time.Second
+	MAX_STRIKES  = 5
+	BAN_TIME     = 10 * time.Second
 )
 
 type Session struct {
@@ -36,9 +38,18 @@ type Session struct {
 	ActiveAt  time.Time
 }
 
+type SpamGuard struct {
+	Strikes  int
+	UnbanAt  time.Time
+}
+
 var (
 	sessions    = make(map[string]*Session)
 	sessLock    sync.Mutex
+	
+	spamMap     = make(map[string]*SpamGuard)
+	spamLock    sync.Mutex
+
 	upgrader    = websocket.Upgrader{
 		ReadBufferSize:  8192,
 		WriteBufferSize: 8192,
@@ -97,6 +108,43 @@ func (s *Session) Broadcast(data []byte) {
 	s.ActiveAt = time.Now()
 }
 
+func checkSpam(ip string) bool {
+	spamLock.Lock()
+	defer spamLock.Unlock()
+
+	if guard, exists := spamMap[ip]; exists {
+		if time.Now().Before(guard.UnbanAt) {
+			return true
+		}
+		if !guard.UnbanAt.IsZero() && time.Now().After(guard.UnbanAt) {
+			delete(spamMap, ip)
+			return false
+		}
+	}
+	return false
+}
+
+func registerStrike(ip string) {
+	spamLock.Lock()
+	defer spamLock.Unlock()
+
+	if _, exists := spamMap[ip]; !exists {
+		spamMap[ip] = &SpamGuard{Strikes: 0}
+	}
+	
+	spamMap[ip].Strikes++
+	if spamMap[ip].Strikes >= MAX_STRIKES {
+		spamMap[ip].UnbanAt = time.Now().Add(BAN_TIME)
+		log.Printf("[SPAM] Banning IP %s for 10s", ip)
+	}
+}
+
+func clearStrike(ip string) {
+	spamLock.Lock()
+	delete(spamMap, ip)
+	spamLock.Unlock()
+}
+
 func GetSession(id string) *Session {
 	sessLock.Lock()
 	defer sessLock.Unlock()
@@ -143,9 +191,30 @@ func GetSession(id string) *Session {
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if ip == "" { ip = r.RemoteAddr }
+
+	if checkSpam(ip) {
+		http.Error(w, "RATE LIMITED (10s)", 429)
+		return
+	}
+
 	pass := os.Getenv("PASS")
 	if pass != "" && r.Header.Get("X-SVPS-TOKEN") != pass {
-		http.Error(w, "", 403); return
+		registerStrike(ip)
+		http.Error(w, "WRONG PASSWORD", 403)
+		return
+	}
+
+	requiredUser := os.Getenv("NAMES")
+	if requiredUser == "" { requiredUser = "ROOT" }
+	requestUser := r.Header.Get("X-SVPS-USER")
+	if requestUser == "" { requestUser = "root" }
+
+	if requiredUser != requestUser {
+		registerStrike(ip)
+		http.Error(w, "WRONG USERNAME", 403)
+		return
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -157,17 +226,32 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	sess := GetSession(sid)
 	if sess == nil { conn.Close(); return }
 
-	// === SECURITY CHECK: SINGLE USER LOCK ===
 	sess.Lock.Lock()
 	if len(sess.Clients) > 0 {
-		// Jika sudah ada user di sesi ini, TOLAK yang baru!
-		sess.Lock.Unlock()
-		conn.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SESSION LOCKED: Another user is active.\r\n"))
-		conn.Close()
-		return
+		activeUsers := 0
+		for oldConn := range sess.Clients {
+			oldConn.SetWriteDeadline(time.Now().Add(1 * time.Second))
+			if err := oldConn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				oldConn.Close()
+				delete(sess.Clients, oldConn)
+			} else {
+				activeUsers++
+			}
+		}
+		
+		if activeUsers > 0 {
+			sess.Lock.Unlock()
+			conn.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SESSION LOCKED: User Active.\r\n"))
+			conn.Close()
+			registerStrike(ip)
+			return
+		}
 	}
-	// ========================================
+	sess.Lock.Unlock()
 
+	clearStrike(ip)
+	
+	sess.Lock.Lock()
 	sess.Clients[conn] = true
 	conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
 	conn.WriteMessage(websocket.TextMessage, sess.History.Bytes())
