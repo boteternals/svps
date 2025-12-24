@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -20,136 +19,64 @@ import (
 )
 
 const (
-	SVPS_VERSION = "7.5-SENTINEL"
+	SVPS_VERSION = "7.7-LITE"
 	APP_PORT     = "3000"
-	HIST_SIZE    = 16 * 1024
 	PING_INT     = 10 * time.Second
-	MAX_STRIKES  = 5
-	BAN_TIME     = 10 * time.Second
+	IDLE_TIMEOUT = 30 * time.Minute
 )
 
 type Session struct {
-	ID        string
-	PTY       *os.File
-	Cmd       *exec.Cmd
-	History   *bytes.Buffer
-	Clients   map[*websocket.Conn]bool
-	Lock      sync.Mutex
-	ActiveAt  time.Time
-}
-
-type SpamGuard struct {
-	Strikes  int
-	UnbanAt  time.Time
+	ID         string
+	PTY        *os.File
+	Cmd        *exec.Cmd
+	Clients    map[*websocket.Conn]bool
+	Lock       sync.Mutex
+	LastActive time.Time
 }
 
 var (
-	sessions    = make(map[string]*Session)
-	sessLock    sync.Mutex
-	
-	spamMap     = make(map[string]*SpamGuard)
-	spamLock    sync.Mutex
-
-	upgrader    = websocket.Upgrader{
-		ReadBufferSize:  8192,
-		WriteBufferSize: 8192,
-		CheckOrigin:     func(r *http.Request) bool { return true },
+	sessions = make(map[string]*Session)
+	sessLock sync.Mutex
+	upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 )
-
-func getBanner() string {
-	ascii := "\r\n   .x+=:.      _                          .x+=:.\r\n" +
-		"  z`    ^%    u                          z`    ^%\r\n" +
-		"     .   <k  88Nu.   u.   .d``              .   <k\r\n" +
-		"   .@8Ned8\" '88888.o888c  @8Ne.   .u      .@8Ned8\"\r\n" +
-		" .@^%8888\"   ^8888  8888  %8888:u@88N   .@^%8888\"\r\n" +
-		"x88:  `)8b.   8888  8888   `888I  888. x88:  `)8b.\r\n" +
-		"8888N=*8888   8888  8888    888I  888I 8888N=*8888\r\n" +
-		" %8\"    R88   8888  8888    888I  888I  %8\"    R88\r\n" +
-		"  @8Wou 9%   .8888b.888P  uW888L  888'   @8Wou 9%\r\n" +
-		".888888P`     ^Y8888*\"\"  '*88888Nu88P  .888888P` \r\n" +
-		"`   ^\"F         `Y\"      ~ '88888F`    `   ^\"F   \r\n" +
-		"                            888 ^                \r\n" +
-		"                            *8E                  \r\n" +
-		"                            '8>                  \r\n" +
-		"                             \"                   \r\n"
-
-	info := fmt.Sprintf("\r\n  SVPS %s | Licensed by Eternals\r\n  CPU: %d Cores\r\n  Support: helpme.eternals@gmail.com\r\n  --------------------------------------------------\r\n",
-		SVPS_VERSION, runtime.NumCPU())
-	
-	return ascii + info
-}
 
 func optimizeSystem() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	var rLimit syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err == nil {
-		rLimit.Cur = 65535; rLimit.Max = 65535
+		rLimit.Cur = 65535
+		rLimit.Max = 65535
 		syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	}
 }
 
-func (s *Session) Broadcast(data []byte) {
-	s.Lock.Lock()
-	defer s.Lock.Unlock()
-	
-	if s.History.Len()+len(data) > HIST_SIZE {
-		s.History.Reset()
-	}
-	s.History.Write(data)
-
-	for conn := range s.Clients {
-		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			conn.Close()
-			delete(s.Clients, conn)
+func startCleaner() {
+	for {
+		time.Sleep(1 * time.Minute)
+		sessLock.Lock()
+		for id, s := range sessions {
+			s.Lock.Lock()
+			if len(s.Clients) == 0 && time.Since(s.LastActive) > IDLE_TIMEOUT {
+				log.Printf("[GC] Killing idle session: %s", id)
+				s.PTY.Close()
+				s.Cmd.Process.Kill()
+				delete(sessions, id)
+			}
+			s.Lock.Unlock()
 		}
+		sessLock.Unlock()
 	}
-	s.ActiveAt = time.Now()
-}
-
-func checkSpam(ip string) bool {
-	spamLock.Lock()
-	defer spamLock.Unlock()
-
-	if guard, exists := spamMap[ip]; exists {
-		if time.Now().Before(guard.UnbanAt) {
-			return true
-		}
-		if !guard.UnbanAt.IsZero() && time.Now().After(guard.UnbanAt) {
-			delete(spamMap, ip)
-			return false
-		}
-	}
-	return false
-}
-
-func registerStrike(ip string) {
-	spamLock.Lock()
-	defer spamLock.Unlock()
-
-	if _, exists := spamMap[ip]; !exists {
-		spamMap[ip] = &SpamGuard{Strikes: 0}
-	}
-	
-	spamMap[ip].Strikes++
-	if spamMap[ip].Strikes >= MAX_STRIKES {
-		spamMap[ip].UnbanAt = time.Now().Add(BAN_TIME)
-		log.Printf("[SPAM] Banning IP %s for 10s", ip)
-	}
-}
-
-func clearStrike(ip string) {
-	spamLock.Lock()
-	delete(spamMap, ip)
-	spamLock.Unlock()
 }
 
 func GetSession(id string) *Session {
 	sessLock.Lock()
 	defer sessLock.Unlock()
 
-	if s, ok := sessions[id]; ok { return s }
+	if s, ok := sessions[id]; ok {
+		return s
+	}
 
 	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
 	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
@@ -163,26 +90,53 @@ func GetSession(id string) *Session {
 
 	c := exec.Command("bash")
 	c.Env = append(os.Environ(), "TERM=xterm-256color", "HOME=/root")
-	
-	fPty, err := pty.Start(c)
-	if err != nil { return nil }
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+
+	fPty, err := pty.StartWithSize(c, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		return nil
+	}
 
 	sess := &Session{
-		ID: id, PTY: fPty, Cmd: c,
-		History: bytes.NewBuffer(make([]byte, 0, HIST_SIZE)),
-		Clients: make(map[*websocket.Conn]bool),
-		ActiveAt: time.Now(),
+		ID:         id,
+		PTY:        fPty,
+		Cmd:        c,
+		Clients:    make(map[*websocket.Conn]bool),
+		LastActive: time.Now(),
 	}
 
 	go func() {
-		buf := make([]byte, 4096)
+		defer func() {
+			sessLock.Lock()
+			delete(sessions, id)
+			sessLock.Unlock()
+			fPty.Close()
+		}()
+
+		buf := make([]byte, 8192)
 		for {
 			n, err := fPty.Read(buf)
-			if err != nil {
-				sessLock.Lock(); delete(sessions, id); sessLock.Unlock()
-				fPty.Close(); return
+			if err != nil { return }
+
+			sess.Lock.Lock()
+			sess.LastActive = time.Now()
+			
+			activeConns := make([]*websocket.Conn, 0, len(sess.Clients))
+			for c := range sess.Clients {
+				activeConns = append(activeConns, c)
 			}
-			sess.Broadcast(buf[:n])
+			sess.Lock.Unlock()
+
+			data := buf[:n]
+			for _, conn := range activeConns {
+				conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)) // Fast timeout
+				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+					conn.Close()
+					sess.Lock.Lock()
+					delete(sess.Clients, conn)
+					sess.Lock.Unlock()
+				}
+			}
 		}
 	}()
 
@@ -191,29 +145,9 @@ func GetSession(id string) *Session {
 }
 
 func handleSussh(w http.ResponseWriter, r *http.Request) {
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if ip == "" { ip = r.RemoteAddr }
-
-	if checkSpam(ip) {
-		http.Error(w, "RATE LIMITED (10s)", 429)
-		return
-	}
-
 	pass := os.Getenv("PASS")
 	if pass != "" && r.Header.Get("X-SVPS-TOKEN") != pass {
-		registerStrike(ip)
-		http.Error(w, "WRONG PASSWORD", 403)
-		return
-	}
-
-	requiredUser := os.Getenv("NAMES")
-	if requiredUser == "" { requiredUser = "ROOT" }
-	requestUser := r.Header.Get("X-SVPS-USER")
-	if requestUser == "" { requestUser = "root" }
-
-	if requiredUser != requestUser {
-		registerStrike(ip)
-		http.Error(w, "WRONG USERNAME", 403)
+		http.Error(w, "Forbidden", 403)
 		return
 	}
 
@@ -224,66 +158,34 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	if sid == "" { sid = "main" }
 
 	sess := GetSession(sid)
-	if sess == nil { conn.Close(); return }
-
-	sess.Lock.Lock()
-	if len(sess.Clients) > 0 {
-		activeUsers := 0
-		for oldConn := range sess.Clients {
-			oldConn.SetWriteDeadline(time.Now().Add(1 * time.Second))
-			if err := oldConn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				oldConn.Close()
-				delete(sess.Clients, oldConn)
-			} else {
-				activeUsers++
-			}
-		}
-		
-		if activeUsers > 0 {
-			sess.Lock.Unlock()
-			conn.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SESSION LOCKED: User Active.\r\n"))
-			conn.Close()
-			registerStrike(ip)
-			return
-		}
+	if sess == nil {
+		conn.Close()
+		return
 	}
-	sess.Lock.Unlock()
 
-	clearStrike(ip)
-	
 	sess.Lock.Lock()
 	sess.Clients[conn] = true
-	conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
-	conn.WriteMessage(websocket.TextMessage, sess.History.Bytes())
+	sess.LastActive = time.Now() 
 	sess.Lock.Unlock()
 
-	exit := make(chan bool)
-	go func() {
-		tk := time.NewTicker(PING_INT)
-		defer tk.Stop()
-		for {
-			select {
-			case <-tk.C:
-				sess.Lock.Lock()
-				if _, ok := sess.Clients[conn]; !ok { sess.Lock.Unlock(); return }
-				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					sess.Lock.Unlock(); return
-				}
-				sess.Lock.Unlock()
-			case <-exit: return
-			}
-		}
-	}()
+	conn.WriteMessage(websocket.TextMessage, []byte("\r\n\033[1;32m[SVPS LITE] Connected. No logs stored.\033[0m\r\n"))
 
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil { break }
-		if sess.PTY != nil { sess.PTY.Write(msg) }
+		sess.Lock.Lock()
+		sess.LastActive = time.Now()
+		sess.Lock.Unlock()
+		
+		if sess.PTY != nil {
+			sess.PTY.Write(msg)
+		}
 	}
 
-	close(exit)
-	sess.Lock.Lock(); delete(sess.Clients, conn); sess.Lock.Unlock()
+	sess.Lock.Lock()
+	delete(sess.Clients, conn)
+	sess.Lock.Unlock()
+	conn.Close()
 }
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +195,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 	} else {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "SVPS %s READY", SVPS_VERSION)
+		fmt.Fprintf(w, "SVPS %s RUNNING", SVPS_VERSION)
 	}
 }
 
@@ -308,10 +210,12 @@ func main() {
 		}
 	}()
 
+	go startCleaner()
+
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", handleProxy)
 
-	log.Printf("Listening on %s", port)
+	log.Printf("SVPS %s on port %s", SVPS_VERSION, port)
 	http.ListenAndServe(":"+port, nil)
 }
 
