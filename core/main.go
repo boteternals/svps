@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "10.1-TITAN-FIX"
+	SVPS_VERSION = "10.2-TITAN-STABLE"
 	APP_PORT     = "3000"
 	IDLE_TIMEOUT = 24 * time.Hour
 	ETP_MAGIC    = 0xE7
@@ -208,7 +208,6 @@ func handleETP(w http.ResponseWriter, r *http.Request) {
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		// Log error buat debugging
 		log.Printf("[ETP] Hijack Failed for %s", r.RemoteAddr)
 		http.Error(w, "Server Error", 500)
 		return
@@ -296,19 +295,21 @@ func proxyToPort(w http.ResponseWriter, r *http.Request, targetPort string) {
 	}
 }
 
-// HANDLER UTAMA: KITA GABUNG DISINI (FORCE ROUTING)
+// HANDLER MASTER: DENGAN HEADER DETECTION
 func handleMaster(w http.ResponseWriter, r *http.Request) {
-	// DEBUG: Cek Path yang diterima
-	// log.Printf("Incoming: %s %s", r.Method, r.URL.Path)
+	// DEBUG LOG: Biar kita tau server sebenernya nerima apa
+	log.Printf("[INCOMING] Path: %s | Upgrade: %s", r.URL.Path, r.Header.Get("Upgrade"))
 
-	// 1. FORCE CHECK: Apakah ini request ETP?
-	// Cek Path persis "/etp" ATAU path "/etp/"
-	if r.URL.Path == "/etp" || strings.HasPrefix(r.URL.Path, "/etp/") {
+	// 1. FAIL-SAFE DETECTION: Cek Header 'Upgrade'
+	// Ini anti-gagal. Kalau client kirim kode rahasia 'eternals-protocol',
+	// kita PAKSA masuk terminal, gak peduli path-nya nyasar.
+	upgradeHeader := r.Header.Get("Upgrade")
+	if upgradeHeader == "eternals-protocol" || r.URL.Path == "/etp" || strings.HasPrefix(r.URL.Path, "/etp/") {
 		handleETP(w, r)
 		return
 	}
 
-	// 2. Kalau bukan ETP, jalankan Logic Router (Domain)
+	// 2. Logic Router (Untuk Web/Game)
 	host := r.Host
 	if strings.Contains(host, ":") {
 		h, _, err := net.SplitHostPort(host)
@@ -322,7 +323,7 @@ func handleMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Fallback (Router Error)
+	// 3. Fallback
 	proxyToPort(w, r, APP_PORT)
 }
 
@@ -342,9 +343,8 @@ func main() {
 	}()
 	go startCleaner()
 
-	// GANTI: Gunakan handler tunggal untuk menangkap SEMUA request
 	http.HandleFunc("/", handleMaster)
 
-	log.Printf("SVPS %s [ETP-ONLY] Listening on %s", SVPS_VERSION, port)
+	log.Printf("SVPS %s [TITAN-V10.2] Ready on %s", SVPS_VERSION, port)
 	http.ListenAndServe(":"+port, nil)
 }
