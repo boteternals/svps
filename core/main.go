@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "7.7-LITE"
+	SVPS_VERSION = "7.8-STABLE"
 	APP_PORT     = "3000"
 	PING_INT     = 10 * time.Second
 	IDLE_TIMEOUT = 30 * time.Minute
@@ -41,6 +41,25 @@ var (
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 )
+
+func getBanner() string {
+	ascii := "\r\n   .x+=:.      _                          .x+=:.\r\n" +
+		"  z`    ^%    u                          z`    ^%\r\n" +
+		"     .   <k  88Nu.   u.   .d``              .   <k\r\n" +
+		"   .@8Ned8\" '88888.o888c  @8Ne.   .u      .@8Ned8\"\r\n" +
+		" .@^%8888\"   ^8888  8888  %8888:u@88N   .@^%8888\"\r\n" +
+		"x88:  `)8b.   8888  8888   `888I  888. x88:  `)8b.\r\n" +
+		"8888N=*8888   8888  8888    888I  888I 8888N=*8888\r\n" +
+		" %8\"    R88   8888  8888    888I  888I  %8\"    R88\r\n" +
+		"  @8Wou 9%   .8888b.888P  uW888L  888'   @8Wou 9%\r\n" +
+		".888888P`     ^Y8888*\"\"  '*88888Nu88P  .888888P` \r\n" +
+		"`   ^\"F         `Y\"      ~ '88888F`    `   ^\"F   \r\n" 
+
+	info := fmt.Sprintf("\r\n  SVPS %s | Licensed by Eternals\r\n  CPU: %d Cores | REALTIME MODE (No Logs)\r\n  Support: helpme.eternals@gmail.com\r\n  --------------------------------------------------\r\n",
+		SVPS_VERSION, runtime.NumCPU())
+	
+	return ascii + info
+}
 
 func optimizeSystem() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -74,9 +93,7 @@ func GetSession(id string) *Session {
 	sessLock.Lock()
 	defer sessLock.Unlock()
 
-	if s, ok := sessions[id]; ok {
-		return s
-	}
+	if s, ok := sessions[id]; ok { return s }
 
 	name := os.Getenv("NAMES"); if name == "" { name = "ROOT" }
 	alias := os.Getenv("ALIASE"); if alias == "" { alias = "VPS" }
@@ -93,9 +110,7 @@ func GetSession(id string) *Session {
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 
 	fPty, err := pty.StartWithSize(c, &pty.Winsize{Rows: 24, Cols: 80})
-	if err != nil {
-		return nil
-	}
+	if err != nil { return nil }
 
 	sess := &Session{
 		ID:         id,
@@ -116,7 +131,16 @@ func GetSession(id string) *Session {
 		buf := make([]byte, 8192)
 		for {
 			n, err := fPty.Read(buf)
-			if err != nil { return }
+			if err != nil { 
+				sess.Lock.Lock()
+				for conn := range sess.Clients {
+					conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Session Ended"))
+					conn.Close()
+					delete(sess.Clients, conn)
+				}
+				sess.Lock.Unlock()
+				return 
+			}
 
 			sess.Lock.Lock()
 			sess.LastActive = time.Now()
@@ -129,7 +153,7 @@ func GetSession(id string) *Session {
 
 			data := buf[:n]
 			for _, conn := range activeConns {
-				conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)) // Fast timeout
+				conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 					conn.Close()
 					sess.Lock.Lock()
@@ -168,7 +192,7 @@ func handleSussh(w http.ResponseWriter, r *http.Request) {
 	sess.LastActive = time.Now() 
 	sess.Lock.Unlock()
 
-	conn.WriteMessage(websocket.TextMessage, []byte("\r\n\033[1;32m[SVPS LITE] Connected. No logs stored.\033[0m\r\n"))
+	conn.WriteMessage(websocket.TextMessage, []byte(getBanner()))
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -195,7 +219,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 	} else {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "SVPS %s RUNNING", SVPS_VERSION)
+		fmt.Fprintf(w, "SVPS %s READY", SVPS_VERSION)
 	}
 }
 
@@ -215,7 +239,7 @@ func main() {
 	http.HandleFunc("/sussh", handleSussh)
 	http.HandleFunc("/", handleProxy)
 
-	log.Printf("SVPS %s on port %s", SVPS_VERSION, port)
+	log.Printf("Listening on %s", port)
 	http.ListenAndServe(":"+port, nil)
 }
 
