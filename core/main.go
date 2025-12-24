@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "10.2-TITAN-STABLE"
+	SVPS_VERSION = "10.3-CAMOUFLAGE"
 	APP_PORT     = "3000"
 	IDLE_TIMEOUT = 24 * time.Hour
 	ETP_MAGIC    = 0xE7
@@ -217,9 +217,13 @@ func handleETP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RESPONS HANDSHAKE PALSU (Menyamar jadi WebSocket)
+	// Kita gunakan header standar WS agar Load Balancer senang
 	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
-	bufrw.WriteString("Upgrade: eternals-protocol\r\n")
-	bufrw.WriteString("Connection: Upgrade\r\n\r\n")
+	bufrw.WriteString("Upgrade: websocket\r\n")
+	bufrw.WriteString("Connection: Upgrade\r\n")
+	bufrw.WriteString("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n") // Fake Key
+	bufrw.WriteString("\r\n")
 	bufrw.Flush()
 
 	sid := r.Header.Get("X-SESSION-ID")
@@ -295,21 +299,22 @@ func proxyToPort(w http.ResponseWriter, r *http.Request, targetPort string) {
 	}
 }
 
-// HANDLER MASTER: DENGAN HEADER DETECTION
+// HANDLER MASTER: UPDATE LOGIC DETEKSI
 func handleMaster(w http.ResponseWriter, r *http.Request) {
-	// DEBUG LOG: Biar kita tau server sebenernya nerima apa
-	log.Printf("[INCOMING] Path: %s | Upgrade: %s", r.URL.Path, r.Header.Get("Upgrade"))
+	upgradeHeader := strings.ToLower(r.Header.Get("Upgrade"))
+	
+	// LOGGING BUAT DEBUG
+	log.Printf("[INCOMING] Path: %s | Upgrade: %s", r.URL.Path, upgradeHeader)
 
-	// 1. FAIL-SAFE DETECTION: Cek Header 'Upgrade'
-	// Ini anti-gagal. Kalau client kirim kode rahasia 'eternals-protocol',
-	// kita PAKSA masuk terminal, gak peduli path-nya nyasar.
-	upgradeHeader := r.Header.Get("Upgrade")
-	if upgradeHeader == "eternals-protocol" || r.URL.Path == "/etp" || strings.HasPrefix(r.URL.Path, "/etp/") {
+	// 1. CAMOUFLAGE CHECK: Cek apakah ini WebSocket?
+	// Load Balancer Zeabur akan meneruskan header 'websocket'.
+	// Kita tangkap itu, lalu masuk ke mode ETP.
+	if upgradeHeader == "websocket" || upgradeHeader == "eternals-protocol" || r.URL.Path == "/etp" {
 		handleETP(w, r)
 		return
 	}
 
-	// 2. Logic Router (Untuk Web/Game)
+	// 2. Logic Router (Web/Game)
 	host := r.Host
 	if strings.Contains(host, ":") {
 		h, _, err := net.SplitHostPort(host)
@@ -345,6 +350,6 @@ func main() {
 
 	http.HandleFunc("/", handleMaster)
 
-	log.Printf("SVPS %s [TITAN-V10.2] Ready on %s", SVPS_VERSION, port)
+	log.Printf("SVPS %s [CAMOUFLAGE-MODE] Ready on %s", SVPS_VERSION, port)
 	http.ListenAndServe(":"+port, nil)
 }
