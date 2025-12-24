@@ -32,10 +32,13 @@ RUN curl -L -o /tmp/s6-overlay-noarch.tar.xz https://github.com/just-containers/
     tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz && \
     rm /tmp/*.tar.xz
 
-# 4. Podman Configuration (Rootless / VFS)
-RUN mkdir -p /home/root/.config/containers \
-    && (echo '[storage]';echo 'driver = "vfs"') > /home/root/.config/containers/storage.conf \
-    && sed -i 's/#mount_program/mount_program/' /etc/containers/storage.conf \
+# 4. Podman Configuration (FIXED SECTION)
+# Kita buat config manual agar driver VFS aktif (Stable di PaaS)
+RUN mkdir -p /etc/containers \
+    && echo '[storage]' > /etc/containers/storage.conf \
+    && echo 'driver = "vfs"' >> /etc/containers/storage.conf \
+    && echo 'runroot = "/run/containers/storage"' >> /etc/containers/storage.conf \
+    && echo 'graphroot = "/var/lib/containers/storage"' >> /etc/containers/storage.conf \
     # Create Alias for Emulation
     && echo 'alias docker=podman' >> /root/.bashrc \
     && echo 'alias docker-compose=podman-compose' >> /root/.bashrc
@@ -64,3 +67,4 @@ EXPOSE 8080
 
 # Handover control to S6 Init System
 ENTRYPOINT ["/init"]
+
