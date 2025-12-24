@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	SVPS_VERSION = "10.0-TITAN"
+	SVPS_VERSION = "10.1-TITAN-FIX"
 	APP_PORT     = "3000"
 	IDLE_TIMEOUT = 24 * time.Hour
 	ETP_MAGIC    = 0xE7
@@ -208,6 +208,8 @@ func handleETP(w http.ResponseWriter, r *http.Request) {
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
+		// Log error buat debugging
+		log.Printf("[ETP] Hijack Failed for %s", r.RemoteAddr)
 		http.Error(w, "Server Error", 500)
 		return
 	}
@@ -294,7 +296,19 @@ func proxyToPort(w http.ResponseWriter, r *http.Request, targetPort string) {
 	}
 }
 
-func handleDynamicRouting(w http.ResponseWriter, r *http.Request) {
+// HANDLER UTAMA: KITA GABUNG DISINI (FORCE ROUTING)
+func handleMaster(w http.ResponseWriter, r *http.Request) {
+	// DEBUG: Cek Path yang diterima
+	// log.Printf("Incoming: %s %s", r.Method, r.URL.Path)
+
+	// 1. FORCE CHECK: Apakah ini request ETP?
+	// Cek Path persis "/etp" ATAU path "/etp/"
+	if r.URL.Path == "/etp" || strings.HasPrefix(r.URL.Path, "/etp/") {
+		handleETP(w, r)
+		return
+	}
+
+	// 2. Kalau bukan ETP, jalankan Logic Router (Domain)
 	host := r.Host
 	if strings.Contains(host, ":") {
 		h, _, err := net.SplitHostPort(host)
@@ -308,6 +322,7 @@ func handleDynamicRouting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 3. Fallback (Router Error)
 	proxyToPort(w, r, APP_PORT)
 }
 
@@ -327,8 +342,8 @@ func main() {
 	}()
 	go startCleaner()
 
-	http.HandleFunc("/etp", handleETP)
-	http.HandleFunc("/", handleDynamicRouting)
+	// GANTI: Gunakan handler tunggal untuk menangkap SEMUA request
+	http.HandleFunc("/", handleMaster)
 
 	log.Printf("SVPS %s [ETP-ONLY] Listening on %s", SVPS_VERSION, port)
 	http.ListenAndServe(":"+port, nil)
