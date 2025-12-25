@@ -19,7 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"runtime"  // <--- SEKARANG DIPAKAI
 	"strings"
 	"sync"
 	"syscall"
@@ -31,7 +31,7 @@ import (
 // --- CONFIGURATION ---
 
 const (
-	EngineVer      = "13.0-IRONCLAD"
+	EngineVer      = "13.1-IRONCLAD"
 	ConfigPath     = "/etc/svps/config.json"
 	ProtocolMagic  = 0x5650 // 'V' 'P'
 	ProtocolVer    = 0x0D   // 13
@@ -50,15 +50,6 @@ const (
 
 type SystemConfig struct {
 	Users map[string]string `json:"users"`
-}
-
-type PacketHeader struct {
-	Magic    uint16
-	Version  uint8
-	OpCode   uint8
-	Sequence uint32
-	Length   uint32
-	Checksum uint32
 }
 
 type Session struct {
@@ -91,7 +82,7 @@ func init() {
 func main() {
 	sysLog("INFO", "SystemBoot", "Initializing SVPS V13 Control Plane...")
 	
-	optimizeResources()
+	optimizeResources() // <--- Diperbaiki didalamnya
 	loadConfig()
 	loadRoutes()
 	go resolvePublicIP()
@@ -110,8 +101,6 @@ func main() {
 
 func trafficDispatcher(w http.ResponseWriter, r *http.Request) {
 	// 1. WebSocket Upgrade Detection (Strict RFC 6455)
-	// Kita mematuhi handshake WS hanya agar Load Balancer Zeabur mengizinkan lewat.
-	// Setelah handshake selesai, kita beralih ke Binary ETP.
 	upgrade := strings.ToLower(r.Header.Get("Upgrade"))
 	if upgrade == "websocket" {
 		upgradeToETP(w, r)
@@ -167,14 +156,13 @@ func handleProtocolLifecycle(conn net.Conn) {
 	}
 
 	// PHASE 2: SESSION ATTACHMENT
-	// Generate or Retrieve Session
-	sessID := generateID() // For V13, we enforce new session for security
+	sessID := generateID()
 	sess := createControlSession(sessID, user)
 	if sess == nil { return }
 
 	// Link Connection
 	sess.Lock.Lock()
-	if sess.Conn != nil { sess.Conn.Close() } // Force disconnect old client
+	if sess.Conn != nil { sess.Conn.Close() }
 	sess.Conn = conn
 	sess.Lock.Unlock()
 
@@ -191,7 +179,6 @@ func handleProtocolLifecycle(conn net.Conn) {
 		sess.LastActive = time.Now()
 		sess.Lock.Unlock()
 
-		// Dispatch based on OpCode
 		switch op {
 		case OpShellData:
 			sess.PTY.Write(payload)
@@ -264,7 +251,7 @@ func sendPacket(conn net.Conn, op uint8, seq uint32, data []byte) error {
 	binary.BigEndian.PutUint32(buf[4:8], seq)
 	binary.BigEndian.PutUint32(buf[8:12], length)
 	
-	// Calculate CRC32 of Data
+	// Calculate CRC32
 	crc := crc32.ChecksumIEEE(data)
 	binary.BigEndian.PutUint32(buf[12:16], crc)
 
@@ -314,8 +301,6 @@ func createControlSession(id, user string) *Session {
 	sessLock.Lock()
 	defer sessLock.Unlock()
 
-	// Environment Injection (The Clean Way)
-	// No .bashrc pollution. Direct memory injection.
 	cmd := exec.Command("bash")
 	
 	// PS1 format: [user@public_ip]:~#
@@ -325,7 +310,7 @@ func createControlSession(id, user string) *Session {
 		"TERM=xterm-256color",
 		"HOME=/root",
 		"USER="+user,
-		"PROMPT_COMMAND="+prompt, // Force prompt every line
+		"PROMPT_COMMAND="+prompt,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 
@@ -334,7 +319,6 @@ func createControlSession(id, user string) *Session {
 
 	sess := &Session{ID: id, User: user, PTY: fPty, Cmd: cmd, LastActive: time.Now()}
 
-	// Output Pump (PTY -> Network)
 	go func() {
 		defer func() {
 			sessLock.Lock()
@@ -346,7 +330,7 @@ func createControlSession(id, user string) *Session {
 		buf := make([]byte, 4096)
 		for {
 			n, err := fPty.Read(buf)
-			if err != nil { return } // Bash died
+			if err != nil { return }
 
 			sess.Lock.Lock()
 			conn := sess.Conn
@@ -355,7 +339,6 @@ func createControlSession(id, user string) *Session {
 			sess.Lock.Unlock()
 
 			if conn != nil {
-				// Ignore errors here (if client disconnects, we just wait for reconnect)
 				sendPacket(conn, OpShellData, seq, buf[:n])
 			}
 		}
@@ -384,7 +367,6 @@ func loadConfig() {
 
 	f, err := os.Open(ConfigPath)
 	if err != nil {
-		// Default secure config
 		config = SystemConfig{Users: map[string]string{"root": "Xycil911"}}
 		saveConfig()
 		return
@@ -412,6 +394,9 @@ func resolvePublicIP() {
 }
 
 func optimizeResources() {
+	// FIX: Menggunakan runtime agar tidak error "imported and not used"
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	
 	var rLimit syscall.Rlimit
 	syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	rLimit.Cur = 65535
@@ -431,6 +416,30 @@ func loadRoutes() {
 func handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil { host = h }
+	target := "80"
+	if t, ok := routes[host]; ok { target = t }
+	u, _ := url.Parse("http://127.0.0.1:" + target)
+	proxy := httputil.NewSingleHostReverseProxy(u)
+	proxy.ServeHTTP(w, r)
+}
+
+func sessionWatchdog() {
+	for {
+		time.Sleep(10 * time.Minute)
+		sessLock.Lock()
+		for id, s := range sessions {
+			s.Lock.Lock()
+			if s.Conn == nil && time.Since(s.LastActive) > 12*time.Hour {
+				s.PTY.Close()
+				s.Cmd.Process.Kill()
+				delete(sessions, id)
+			}
+			s.Lock.Unlock()
+		}
+		sessLock.Unlock()
+	}
+}
+; err == nil { host = h }
 	target := "80"
 	if t, ok := routes[host]; ok { target = t }
 	u, _ := url.Parse("http://127.0.0.1:" + target)
