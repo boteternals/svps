@@ -76,6 +76,7 @@ func init() {
 func main() {
 	sysLog("INFO", "SystemBoot", "Initializing SVPS V13 Control Plane...")
 	optimizeResources()
+	makeImmortal()
 	loadConfig()
 	loadRoutes()
 	go resolvePublicIP()
@@ -89,6 +90,10 @@ func main() {
 	http.HandleFunc("/", trafficDispatcher)
 	sysLog("INFO", "NetworkReady", fmt.Sprintf("Listening on port %s", port))
 	http.ListenAndServe(":"+port, nil)
+}
+
+func makeImmortal() {
+	os.WriteFile("/proc/self/oom_score_adj", []byte("-500"), 0644)
 }
 
 func trafficDispatcher(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +240,7 @@ func sendPacket(conn net.Conn, op uint8, seq uint32, data []byte) error {
 
 	copy(buf[16:], data)
 
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Hour))
 	_, err := conn.Write(buf)
 	return err
 }
@@ -277,7 +282,8 @@ func createControlSession(id, user string) *Session {
 	defer sessLock.Unlock()
 
 	cmd := exec.Command("bash")
-	prompt := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:~# '", user, publicIP)
+	
+	prompt := fmt.Sprintf("export PS1='|--《 \\[\\033[01;36m\\]\\w\\[\\033[00m\\] 》\\n|-\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:~# '", user, publicIP)
 
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
@@ -420,4 +426,3 @@ func sessionWatchdog() {
 		sessLock.Unlock()
 	}
 }
-
