@@ -19,7 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"  // <--- SEKARANG DIPAKAI
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,16 +28,12 @@ import (
 	"github.com/creack/pty"
 )
 
-// --- CONFIGURATION ---
-
 const (
-	EngineVer      = "13.1-IRONCLAD"
+	EngineVer      = "13.3-IRONCLAD"
 	ConfigPath     = "/etc/svps/config.json"
-	ProtocolMagic  = 0x5650 // 'V' 'P'
-	ProtocolVer    = 0x0D   // 13
-	MaxPacketSize  = 1024 * 1024 // 1MB Limit
-	
-	// OPCODES (Internal Control Protocol)
+	ProtocolMagic  = 0x5650
+	ProtocolVer    = 0x0D
+	MaxPacketSize  = 1024 * 1024
 	OpAuthInit     = 0x01
 	OpAuthChal     = 0x02
 	OpAuthResp     = 0x03
@@ -72,8 +68,6 @@ var (
 	publicIP string
 )
 
-// --- INITIALIZATION ---
-
 func init() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stdout)
@@ -81,33 +75,28 @@ func init() {
 
 func main() {
 	sysLog("INFO", "SystemBoot", "Initializing SVPS V13 Control Plane...")
-	
-	optimizeResources() // <--- Diperbaiki didalamnya
+	optimizeResources()
 	loadConfig()
 	loadRoutes()
 	go resolvePublicIP()
 	go sessionWatchdog()
 
 	port := os.Getenv("PORT")
-	if port == "" { port = "8080" }
+	if port == "" {
+		port = "8080"
+	}
 
 	http.HandleFunc("/", trafficDispatcher)
-
 	sysLog("INFO", "NetworkReady", fmt.Sprintf("Listening on port %s", port))
 	http.ListenAndServe(":"+port, nil)
 }
 
-// --- TRANSPORT LAYER (The Gatekeeper) ---
-
 func trafficDispatcher(w http.ResponseWriter, r *http.Request) {
-	// 1. WebSocket Upgrade Detection (Strict RFC 6455)
 	upgrade := strings.ToLower(r.Header.Get("Upgrade"))
 	if upgrade == "websocket" {
 		upgradeToETP(w, r)
 		return
 	}
-
-	// 2. HTTP Reverse Proxy (Fallback / Web)
 	handleHTTPProxy(w, r)
 }
 
@@ -118,7 +107,6 @@ func upgradeToETP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Calculate Accept Key
 	h := sha1.New()
 	h.Write([]byte(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 	acceptKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -129,9 +117,10 @@ func upgradeToETP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn, bufrw, err := hj.Hijack()
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 
-	// Send 101 Switching Protocols
 	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
 	bufrw.WriteString("Upgrade: websocket\r\n")
 	bufrw.WriteString("Connection: Upgrade\r\n")
@@ -139,41 +128,39 @@ func upgradeToETP(w http.ResponseWriter, r *http.Request) {
 	bufrw.WriteString("\r\n")
 	bufrw.Flush()
 
-	// Handover to Protocol Layer
 	handleProtocolLifecycle(conn)
 }
 
-// --- PROTOCOL LAYER (The Translator) ---
-
 func handleProtocolLifecycle(conn net.Conn) {
 	defer conn.Close()
-	
-	// PHASE 1: AUTHENTICATION
+
 	user, err := performHandshake(conn)
 	if err != nil {
 		sysLog("WARN", "AuthFailed", err.Error())
 		return
 	}
 
-	// PHASE 2: SESSION ATTACHMENT
 	sessID := generateID()
 	sess := createControlSession(sessID, user)
-	if sess == nil { return }
+	if sess == nil {
+		return
+	}
 
-	// Link Connection
 	sess.Lock.Lock()
-	if sess.Conn != nil { sess.Conn.Close() }
+	if sess.Conn != nil {
+		sess.Conn.Close()
+	}
 	sess.Conn = conn
 	sess.Lock.Unlock()
 
-	// Notify Client
 	sendPacket(conn, OpAuthOK, 0, []byte(sessID))
 	sysLog("INFO", "SessionAttached", fmt.Sprintf("User:%s ID:%s", user, sessID))
 
-	// PHASE 3: DATA LOOP
 	for {
 		op, _, payload, err := readPacket(conn)
-		if err != nil { break }
+		if err != nil {
+			break
+		}
 
 		sess.Lock.Lock()
 		sess.LastActive = time.Now()
@@ -189,28 +176,24 @@ func handleProtocolLifecycle(conn net.Conn) {
 				pty.Setsize(sess.PTY, &pty.Winsize{Rows: rows, Cols: cols})
 			}
 		case OpPing:
-			// Keepalive
 		}
 	}
 }
 
 func performHandshake(conn net.Conn) (string, error) {
-	// 1. Send Challenge
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
 	nonceHex := hex.EncodeToString(nonce)
-	
+
 	if err := sendPacket(conn, OpAuthChal, 0, []byte(nonceHex)); err != nil {
 		return "", err
 	}
 
-	// 2. Read Response
 	op, _, payload, err := readPacket(conn)
 	if err != nil || op != OpAuthResp {
 		return "", fmt.Errorf("protocol violation during auth")
 	}
 
-	// Payload: "user|hash"
 	data := string(payload)
 	parts := strings.Split(data, "|")
 	if len(parts) != 2 {
@@ -221,12 +204,11 @@ func performHandshake(conn net.Conn) (string, error) {
 	user, clientHash := parts[0], parts[1]
 	storedPass, ok := config.Users[user]
 	if !ok {
-		time.Sleep(200 * time.Millisecond) // Fake delay
+		time.Sleep(200 * time.Millisecond)
 		sendPacket(conn, OpAuthFail, 0, []byte("Invalid Creds"))
 		return "", fmt.Errorf("unknown user %s", user)
 	}
 
-	// 3. Verify: SHA256(Pass + Nonce)
 	expectedHash := sha256.Sum256([]byte(storedPass + nonceHex))
 	expectedStr := hex.EncodeToString(expectedHash[:])
 
@@ -238,11 +220,8 @@ func performHandshake(conn net.Conn) (string, error) {
 	return user, nil
 }
 
-// --- PACKET HANDLING (Strict Framing & Integrity) ---
-
 func sendPacket(conn net.Conn, op uint8, seq uint32, data []byte) error {
 	length := uint32(len(data))
-	// Header: Magic(2) + Ver(1) + Op(1) + Seq(4) + Len(4) + CRC(4) = 16 Bytes
 	buf := make([]byte, 16+length)
 
 	binary.BigEndian.PutUint16(buf[0:2], ProtocolMagic)
@@ -250,8 +229,7 @@ func sendPacket(conn net.Conn, op uint8, seq uint32, data []byte) error {
 	buf[3] = op
 	binary.BigEndian.PutUint32(buf[4:8], seq)
 	binary.BigEndian.PutUint32(buf[8:12], length)
-	
-	// Calculate CRC32
+
 	crc := crc32.ChecksumIEEE(data)
 	binary.BigEndian.PutUint32(buf[12:16], crc)
 
@@ -287,25 +265,20 @@ func readPacket(conn io.Reader) (uint8, uint32, []byte, error) {
 		return 0, 0, nil, err
 	}
 
-	// Verify Integrity
 	if crc32.ChecksumIEEE(payload) != expectedCRC {
-		return 0, 0, nil, fmt.Errorf("checksum mismatch - data corrupted")
+		return 0, 0, nil, fmt.Errorf("checksum mismatch")
 	}
 
 	return op, seq, payload, nil
 }
-
-// --- CONTROL LAYER (PTY & Session) ---
 
 func createControlSession(id, user string) *Session {
 	sessLock.Lock()
 	defer sessLock.Unlock()
 
 	cmd := exec.Command("bash")
-	
-	// PS1 format: [user@public_ip]:~#
 	prompt := fmt.Sprintf("export PS1='\\[\\033[01;32m\\]%s@%s\\[\\033[00m\\]:~# '", user, publicIP)
-	
+
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"HOME=/root",
@@ -315,7 +288,9 @@ func createControlSession(id, user string) *Session {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 
 	fPty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 
 	sess := &Session{ID: id, User: user, PTY: fPty, Cmd: cmd, LastActive: time.Now()}
 
@@ -330,7 +305,9 @@ func createControlSession(id, user string) *Session {
 		buf := make([]byte, 4096)
 		for {
 			n, err := fPty.Read(buf)
-			if err != nil { return }
+			if err != nil {
+				return
+			}
 
 			sess.Lock.Lock()
 			conn := sess.Conn
@@ -348,10 +325,8 @@ func createControlSession(id, user string) *Session {
 	return sess
 }
 
-// --- UTILITIES ---
-
 func sysLog(level, event, msg string) {
-	fmt.Printf(`{"ts":"%s","lvl":"%s","evt":"%s","msg":"%s"}`+"\n", 
+	fmt.Printf(`{"ts":"%s","lvl":"%s","evt":"%s","msg":"%s"}`+"\n",
 		time.Now().Format(time.RFC3339), level, event, msg)
 }
 
@@ -394,10 +369,58 @@ func resolvePublicIP() {
 }
 
 func optimizeResources() {
-	// FIX: Menggunakan runtime agar tidak error "imported and not used"
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	
 	var rLimit syscall.Rlimit
+	syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	rLimit.Cur = 65535
+	rLimit.Max = 65535
+	syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+}
+
+func loadRoutes() {
+	raw := os.Getenv("ROUTES")
+	if raw == "" {
+		return
+	}
+	for _, r := range strings.Split(raw, ";") {
+		p := strings.Split(r, ":")
+		if len(p) >= 2 {
+			routes[strings.TrimSpace(p[0])] = strings.TrimSpace(p[1])
+		}
+	}
+}
+
+func handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	target := "80"
+	if t, ok := routes[host]; ok {
+		target = t
+	}
+	u, _ := url.Parse("http://127.0.0.1:" + target)
+	proxy := httputil.NewSingleHostReverseProxy(u)
+	proxy.ServeHTTP(w, r)
+}
+
+func sessionWatchdog() {
+	for {
+		time.Sleep(10 * time.Minute)
+		sessLock.Lock()
+		for id, s := range sessions {
+			s.Lock.Lock()
+			if s.Conn == nil && time.Since(s.LastActive) > 12*time.Hour {
+				s.PTY.Close()
+				s.Cmd.Process.Kill()
+				delete(sessions, id)
+			}
+			s.Lock.Unlock()
+		}
+		sessLock.Unlock()
+	}
+}
+ rLimit syscall.Rlimit
 	syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	rLimit.Cur = 65535
 	rLimit.Max = 65535
