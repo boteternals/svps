@@ -59,7 +59,6 @@ var (
 	config   SystemConfig
 	sessions = make(map[string]*Session)
 	sessLock sync.Mutex
-	routes   = make(map[string]string)
 )
 
 func main() {
@@ -82,6 +81,7 @@ func main() {
 }
 
 func makeImmortal() {
+	// Memastikan OOM Killer tidak mudah membunuh proses ini
 	os.WriteFile("/proc/self/oom_score_adj", []byte("-500"), 0644)
 }
 
@@ -202,7 +202,9 @@ func createControlSession(id, user string) *Session {
 			if sess.Conn != nil { sess.Conn.Close() }
 			sess.Lock.Unlock()
 		}()
-		buf := make([]byte, 8192)
+		
+		// --- FIX: BUFFER DIPERKECIL UNTUK REAL-TIME ---
+		buf := make([]byte, 1024) 
 		for {
 			n, err := fPty.Read(buf)
 			if err != nil { return }
@@ -240,6 +242,7 @@ func optimizeResources() {
 }
 
 func handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
+	// Proxy standar ke port 80 jika bukan WebSocket ETP
 	u, _ := url.Parse("http://127.0.0.1:80")
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
