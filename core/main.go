@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	EngineVer      = "13.3-IRONCLAD"
+	EngineVer      = "13.4-IRONCLAD-PATCHED"
 	ConfigPath     = "/etc/svps/config.json"
 	ProtocolMagic  = 0x5650
 	ProtocolVer    = 0x0D
@@ -137,10 +137,9 @@ func upgradeToETP(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProtocolLifecycle(conn net.Conn) {
-	defer conn.Close()
-
 	user, err := performHandshake(conn)
 	if err != nil {
+		conn.Close()
 		sysLog("WARN", "AuthFailed", err.Error())
 		return
 	}
@@ -148,6 +147,7 @@ func handleProtocolLifecycle(conn net.Conn) {
 	sessID := generateID()
 	sess := createControlSession(sessID, user)
 	if sess == nil {
+		conn.Close()
 		return
 	}
 
@@ -157,6 +157,16 @@ func handleProtocolLifecycle(conn net.Conn) {
 	}
 	sess.Conn = conn
 	sess.Lock.Unlock()
+
+	defer func() {
+		sess.Lock.Lock()
+		if sess.Conn == conn {
+			sess.Conn = nil
+		}
+		sess.Lock.Unlock()
+		conn.Close()
+		sysLog("INFO", "SessionDetached", fmt.Sprintf("User:%s ID:%s", user, sessID))
+	}()
 
 	sendPacket(conn, OpAuthOK, 0, []byte(sessID))
 	sysLog("INFO", "SessionAttached", fmt.Sprintf("User:%s ID:%s", user, sessID))
