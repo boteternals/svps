@@ -11,14 +11,12 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -68,7 +66,6 @@ func main() {
 	optimizeResources()
 	makeImmortal()
 	loadConfig()
-	loadRoutes()
 	go sessionWatchdog()
 
 	port := os.Getenv("PORT")
@@ -261,6 +258,3 @@ func sessionWatchdog() {
 		sessLock.Unlock()
 	}
 }
-
-func loadRoutes() {}
-func sysLog(l, e, m string) {}
